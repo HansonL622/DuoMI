@@ -1,0 +1,198 @@
+import type { ChatMessage, DiaryEntry, Mood, UserProfile, UserSettings } from '../types';
+import { supabase } from './supabaseClient';
+
+type DiaryRow = {
+  id: string;
+  entry_date: string;
+  content: string;
+  mood: Mood | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatRow = {
+  id: string;
+  role: ChatMessage['role'];
+  content: string;
+  created_at: string;
+};
+
+const emptyProfile = (): UserProfile => ({
+  key_facts: [],
+  recent_mood: '',
+  current_stressors: [],
+  deep_fears: [],
+  rejected_memories: [],
+  settings: {
+    responseTone: 'mature',
+  },
+});
+
+function normalizeSettings(settings: Partial<UserSettings> | null | undefined): UserSettings {
+  const responseTone = settings?.responseTone;
+  return {
+    responseTone: responseTone === 'gentle' || responseTone === 'direct' || responseTone === 'reflective' ? responseTone : 'mature',
+  };
+}
+
+function normalizeProfile(profile: Partial<UserProfile> | null | undefined): UserProfile {
+  return {
+    ...emptyProfile(),
+    ...(profile || {}),
+    key_facts: Array.isArray(profile?.key_facts) ? profile.key_facts : [],
+    current_stressors: Array.isArray(profile?.current_stressors) ? profile.current_stressors : [],
+    deep_fears: Array.isArray(profile?.deep_fears) ? profile.deep_fears : [],
+    rejected_memories: Array.isArray(profile?.rejected_memories) ? profile.rejected_memories : [],
+    recent_mood: typeof profile?.recent_mood === 'string' ? profile.recent_mood : '',
+    settings: normalizeSettings(profile?.settings),
+  };
+}
+
+function requireSupabase() {
+  if (!supabase) {
+    throw new Error('Supabase 尚未配置，请先填写环境变量');
+  }
+  return supabase;
+}
+
+function toLocalDateString(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toDiaryEntry(row: DiaryRow): DiaryEntry {
+  const timestamp = new Date(`${row.entry_date}T12:00:00`).getTime();
+  return {
+    id: row.id,
+    date: new Date(timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+    timestamp,
+    content: row.content,
+    mood: row.mood || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export async function getOrCreateProfile(userId: string): Promise<UserProfile> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('profiles')
+    .select('profile')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (data?.profile) return normalizeProfile(data.profile as Partial<UserProfile>);
+
+  const profile = emptyProfile();
+  const { error: insertError } = await client
+    .from('profiles')
+    .insert({ user_id: userId, profile });
+
+  if (insertError) throw insertError;
+  return profile;
+}
+
+export async function saveProfile(userId: string, profile: UserProfile): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client
+    .from('profiles')
+    .upsert({ user_id: userId, profile, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+
+  if (error) throw error;
+}
+
+export async function listDiaryEntries(): Promise<DiaryEntry[]> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('diary_entries')
+    .select('*')
+    .order('entry_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return ((data || []) as DiaryRow[]).map(toDiaryEntry);
+}
+
+export async function createDiaryEntry(entryDate: Date, content: string, mood: Mood | null): Promise<DiaryEntry> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('diary_entries')
+    .insert({
+      entry_date: toLocalDateString(entryDate),
+      content,
+      mood,
+    })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return toDiaryEntry(data as DiaryRow);
+}
+
+export async function updateDiaryEntry(id: string, content: string, mood: Mood | null): Promise<DiaryEntry> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('diary_entries')
+    .update({ content, mood, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return toDiaryEntry(data as DiaryRow);
+}
+
+export async function deleteDiaryEntry(id: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.from('diary_entries').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function listChatMessages(): Promise<ChatMessage[]> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('chat_messages')
+    .select('*')
+    .order('created_at', { ascending: true })
+    .limit(100);
+
+  if (error) throw error;
+  return ((data || []) as ChatRow[]).map((row) => ({
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    created_at: row.created_at,
+  }));
+}
+
+export async function createChatMessage(role: ChatMessage['role'], content: string): Promise<ChatMessage> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('chat_messages')
+    .insert({ role, content })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return {
+    id: data.id,
+    role: data.role,
+    content: data.content,
+    created_at: data.created_at,
+  };
+}
+
+export async function clearAllUserData(userId: string): Promise<void> {
+  const client = requireSupabase();
+  const [diary, chat, profile] = await Promise.all([
+    client.from('diary_entries').delete().eq('user_id', userId),
+    client.from('chat_messages').delete().eq('user_id', userId),
+    client.from('profiles').delete().eq('user_id', userId),
+  ]);
+
+  const error = diary.error || chat.error || profile.error;
+  if (error) throw error;
+}
