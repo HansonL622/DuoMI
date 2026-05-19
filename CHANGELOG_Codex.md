@@ -23,6 +23,14 @@ This file records project changes made through Codex conversations so future ses
 
 ## Entries
 
+### 2026-05-19 - Update README for current DuoMi features
+
+- Request: Reflect the new chat streaming, memory controls, transparent brain privacy, and evaluation workflow in documentation.
+- Files changed: `README.md`, `CHANGELOG_Codex.md`
+- Summary: Rewrote README sections for current features, local/Vercel setup, Supabase profile schema, memory severity, forgetting policy, transparent brain password recovery, AI routes, scripts, and evals.
+- Verification: Documentation-only change; no tests run.
+- Notes: README now describes the post-merge `main` behavior.
+
 ### 2026-05-18 - Add shared Codex change log
 
 - Request: Create a document that records each modification so different Codex windows can understand project history.
