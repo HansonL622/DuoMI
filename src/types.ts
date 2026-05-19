@@ -5,6 +5,21 @@ export interface UserSettings {
   responseTone: ResponseTone;
   customToneRequest?: string;
   customTonePrompt?: string;
+  brainLockEnabled?: boolean;
+  brainPasscodeHash?: string;
+  brainRecoveryQuestion?: string;
+  brainRecoveryAnswerHash?: string;
+}
+
+export type MemorySeverity = 1 | 2 | 3 | 4 | 5;
+
+export interface MemoryEvent {
+  id: string;
+  content: string;
+  severity: MemorySeverity;
+  source?: 'stress' | 'experience' | 'fear' | 'fact';
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface UserProfile {
@@ -12,6 +27,7 @@ export interface UserProfile {
   recent_mood: string;
   current_stressors: string[];
   deep_fears: string[];
+  memory_events?: MemoryEvent[];
   rejected_memories?: string[];
   nickname?: string;
   settings?: UserSettings;

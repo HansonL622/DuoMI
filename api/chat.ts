@@ -10,6 +10,10 @@ type ApiRequest = {
 
 type ApiResponse = {
   status: (code: number) => { json: (body: unknown) => void };
+  setHeader: (name: string, value: string) => void;
+  write: (chunk: string) => void;
+  end: () => void;
+  headersSent?: boolean;
 };
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
@@ -26,16 +30,25 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       return;
     }
 
-    const reply = await getAiProvider().sendCompanionMessage(
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    await getAiProvider().streamCompanionMessage(
       (profile || null) as UserProfile | null,
       (Array.isArray(history) ? history : []) as ChatMessage[],
       message,
       (Array.isArray(relatedDiaryEntries) ? relatedDiaryEntries : []) as DiaryEntry[],
       (runtimeContext || null) as ChatRuntimeContext | null,
+      (delta) => res.write(delta),
     );
 
-    res.status(200).json({ message: reply });
+    res.end();
   } catch (error) {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : 'DuoMi 暂时没有回应' });
   }
 }

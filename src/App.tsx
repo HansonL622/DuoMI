@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Dog,
   Heart,
+  Lock,
   Loader2,
   LogOut,
   Mail,
@@ -35,9 +36,9 @@ import {
   saveProfile,
   updateDiaryEntry,
 } from './services/dataService';
-import { extractProfile, polishCustomTone, sendCompanionMessage } from './services/duomiApi';
+import { extractProfile, polishCustomTone, streamCompanionMessage } from './services/duomiApi';
 import { isSupabaseConfigured, supabase } from './services/supabaseClient';
-import type { ChatConversation, ChatMessage, DiaryEntry, Mood, ResponseTone, UserProfile } from './types';
+import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, ResponseTone, UserProfile } from './types';
 
 const moods: Mood[] = ['happy', 'angry', 'sad', 'naughty', 'surprised', 'sleepy', 'shy', 'proud', 'scared'];
 
@@ -58,6 +59,7 @@ const emptyProfile = (): UserProfile => ({
   recent_mood: '',
   current_stressors: [],
   deep_fears: [],
+  memory_events: [],
   rejected_memories: [],
   settings: {
     responseTone: 'mature',
@@ -72,6 +74,69 @@ const responseToneOptions: Array<{ value: ResponseTone; label: string; descripti
   { value: 'cuddly', label: '绒绒陪伴', description: '可爱、亲近、带一点小狗感' },
   { value: 'custom', label: '专属定制', description: '按你的描述生成语气' },
 ];
+
+const severityOptions: Array<{ value: MemorySeverity; label: string; description: string }> = [
+  { value: 1, label: '轻微', description: '很少主动提起' },
+  { value: 2, label: '一般', description: '明确相关才参考' },
+  { value: 3, label: '中等', description: '高度相关时提及' },
+  { value: 4, label: '严重', description: '谨慎承接' },
+  { value: 5, label: '高严重', description: '优先安全与稳定' },
+];
+
+const brainRecoveryQuestions = [
+  '我小时候最喜欢的昵称是什么？',
+  '我第一只宠物叫什么？',
+  '我最熟悉的一位老师姓什么？',
+  '我最喜欢的一道菜是什么？',
+  '我最想去的城市是哪一座？',
+];
+
+function normalizeRecoveryAnswer(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function hashText(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  return crypto.subtle.digest('SHA-256', bytes).then((hash) =>
+    Array.from(new Uint8Array(hash))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join(''),
+  );
+}
+
+function getMemoryEvents(profile: UserProfile | null): MemoryEvent[] {
+  if (!profile) return [];
+  if (profile.memory_events?.length) return profile.memory_events;
+
+  return [
+    ...(profile.current_stressors || []).map((content, index) => ({
+      id: `legacy-stress-${index}`,
+      content,
+      severity: 3 as MemorySeverity,
+      source: 'stress' as const,
+    })),
+    ...(profile.deep_fears || []).map((content, index) => ({
+      id: `legacy-fear-${index}`,
+      content,
+      severity: 4 as MemorySeverity,
+      source: 'fear' as const,
+    })),
+    ...(profile.key_facts || []).map((content, index) => ({
+      id: `legacy-fact-${index}`,
+      content,
+      severity: 2 as MemorySeverity,
+      source: 'experience' as const,
+    })),
+  ].filter((event) => event.content);
+}
+
+function forgettingLabel(severity: MemorySeverity): string {
+  if (severity <= 1) return '几天后会自然淡出';
+  if (severity === 2) return '一两周无关就少提';
+  if (severity === 3) return '只在高度相关时提及';
+  if (severity === 4) return '谨慎保留，避免反复刺激';
+  return '长期保留，优先安全边界';
+}
 
 function SetupScreen() {
   return (
@@ -232,8 +297,20 @@ export default function App() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isSavingCustomTone, setIsSavingCustomTone] = useState(false);
+  const [isSavingBrainLock, setIsSavingBrainLock] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [isBrainUnlocked, setIsBrainUnlocked] = useState(false);
+  const [brainPasscodeInput, setBrainPasscodeInput] = useState('');
+  const [brainPasscodeDraft, setBrainPasscodeDraft] = useState('');
+  const [brainRecoveryQuestionDraft, setBrainRecoveryQuestionDraft] = useState('');
+  const [brainRecoveryAnswerDraft, setBrainRecoveryAnswerDraft] = useState('');
+  const [brainDisablePasscode, setBrainDisablePasscode] = useState('');
+  const [isBrainRecoveryOpen, setIsBrainRecoveryOpen] = useState(false);
+  const [brainRecoveryAnswerInput, setBrainRecoveryAnswerInput] = useState('');
+  const [brainResetPasscodeDraft, setBrainResetPasscodeDraft] = useState('');
+  const [brainRecoveryError, setBrainRecoveryError] = useState('');
   const [dogState, setDogState] = useState<'listening' | 'recording' | 'thinking' | 'responding'>('listening');
   const [error, setError] = useState<string | null>(null);
 
@@ -241,6 +318,10 @@ export default function App() {
   const chatInputRef = useRef<HTMLInputElement>(null);
   const userId = session?.user.id || '';
   const selectedResponseTone = profile?.settings?.responseTone || 'mature';
+  const isBrainLockEnabled = profile?.settings?.brainLockEnabled === true && Boolean(profile?.settings?.brainPasscodeHash);
+  const brainRecoveryQuestion = profile?.settings?.brainRecoveryQuestion || '';
+  const canRecoverBrainPasscode = Boolean(brainRecoveryQuestion && profile?.settings?.brainRecoveryAnswerHash);
+  const memoryEvents = useMemo(() => getMemoryEvents(profile), [profile]);
   const [customToneDraft, setCustomToneDraft] = useState('');
   const activeConversation = useMemo(
     () => chatConversations.find((conversation) => conversation.id === activeConversationId) || null,
@@ -252,6 +333,20 @@ export default function App() {
       setCustomToneDraft(profile?.settings?.customToneRequest || '');
     }
   }, [isSettingsOpen, profile?.settings?.customToneRequest]);
+
+  useEffect(() => {
+    if (!isBrainOpen) {
+      setBrainPasscodeInput('');
+      setIsBrainRecoveryOpen(false);
+      setBrainRecoveryAnswerInput('');
+      setBrainResetPasscodeDraft('');
+      setBrainRecoveryError('');
+      setIsBrainUnlocked(false);
+      return;
+    }
+
+    setIsBrainUnlocked(!isBrainLockEnabled);
+  }, [isBrainOpen, isBrainLockEnabled]);
 
   useEffect(() => {
     if (!supabase) {
@@ -316,11 +411,12 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
-    if (isChatting) setDogState('thinking');
+    if (streamingMessageId) setDogState('responding');
+    else if (isChatting) setDogState('thinking');
     else if (isResponding) setDogState('responding');
     else if (chatInput.trim().length > 0) setDogState('recording');
     else setDogState('listening');
-  }, [isChatting, isResponding, chatInput]);
+  }, [isChatting, isResponding, streamingMessageId, chatInput]);
 
   useEffect(() => {
     if (window.location.search.includes('settings=1')) {
@@ -546,13 +642,63 @@ export default function App() {
         setChatConversations((prev) => [createdConversation, ...prev]);
       }
 
-      const savedUserMessage = await createChatMessage(conversationId, 'user', userMsg);
-      const nextHistory = [...chatHistory, savedUserMessage];
+      const pendingUserMessage: ChatMessage = {
+        id: `pending-user-${Date.now()}`,
+        conversation_id: conversationId,
+        role: 'user',
+        content: userMsg,
+        created_at: new Date().toISOString(),
+      };
+      const nextHistory = [...chatHistory, pendingUserMessage];
       setChatHistory(nextHistory);
 
-      const response = await sendCompanionMessage(profile, nextHistory, userMsg, relatedDiaryEntries);
-      const savedModelMessage = await createChatMessage(conversationId, 'model', response);
-      setChatHistory((prev) => [...prev, savedModelMessage]);
+      const pendingModelMessage: ChatMessage = {
+        id: `pending-model-${Date.now()}`,
+        conversation_id: conversationId,
+        role: 'model',
+        content: '',
+        created_at: new Date().toISOString(),
+      };
+      let hasStartedStreaming = false;
+      let streamedResponse = '';
+
+      const savedUserMessagePromise = createChatMessage(conversationId, 'user', userMsg);
+      const response = await streamCompanionMessage(profile, nextHistory, userMsg, relatedDiaryEntries, (delta) => {
+        streamedResponse += delta;
+        const isFirstDelta = !hasStartedStreaming;
+        if (isFirstDelta) {
+          hasStartedStreaming = true;
+          setStreamingMessageId(pendingModelMessage.id);
+        }
+
+        setChatHistory((prev) => {
+          if (isFirstDelta) {
+            return [...prev, { ...pendingModelMessage, content: streamedResponse }];
+          }
+
+          return prev.map((messageItem) =>
+            messageItem.id === pendingModelMessage.id
+              ? { ...messageItem, content: streamedResponse }
+              : messageItem,
+          );
+        });
+      });
+
+      if (!hasStartedStreaming) {
+        setChatHistory((prev) => [...prev, { ...pendingModelMessage, content: response }]);
+      }
+
+      const [savedUserMessage, savedModelMessage] = await Promise.all([
+        savedUserMessagePromise,
+        createChatMessage(conversationId, 'model', response),
+      ]);
+      setChatHistory((prev) =>
+        prev.map((messageItem) => {
+          if (messageItem.id === pendingUserMessage.id) return savedUserMessage;
+          if (messageItem.id === pendingModelMessage.id) return savedModelMessage;
+          return messageItem;
+        }),
+      );
       setChatConversations((prev) =>
         prev
           .map((conversation) =>
@@ -572,19 +718,157 @@ export default function App() {
       setError(chatError instanceof Error ? chatError.message : 'DuoMi 暂时没有回应');
     } finally {
       setIsChatting(false);
+      setStreamingMessageId(null);
       setIsResponding(true);
       setTimeout(() => setIsResponding(false), 5000);
     }
   };
 
-  const handleForgetMemory = async (category: keyof Pick<UserProfile, 'key_facts' | 'current_stressors' | 'deep_fears'>, value: string, reject: boolean) => {
+  const persistMemoryEvents = async (nextEvents: MemoryEvent[]) => {
+    const base = profile || emptyProfile();
+    await persistProfile({
+      ...base,
+      memory_events: nextEvents,
+    });
+  };
+
+  const handleForgetMemory = async (memory: MemoryEvent, reject: boolean) => {
     const base = profile || emptyProfile();
     const nextProfile: UserProfile = {
       ...base,
-      [category]: base[category].filter((item) => item !== value),
-      rejected_memories: reject ? Array.from(new Set([...(base.rejected_memories || []), value])) : base.rejected_memories || [],
+      memory_events: memoryEvents.filter((item) => item.id !== memory.id && item.content !== memory.content),
+      current_stressors: base.current_stressors.filter((item) => item !== memory.content),
+      key_facts: base.key_facts.filter((item) => item !== memory.content),
+      deep_fears: base.deep_fears.filter((item) => item !== memory.content),
+      rejected_memories: reject ? Array.from(new Set([...(base.rejected_memories || []), memory.content])) : base.rejected_memories || [],
     };
     await persistProfile(nextProfile);
+  };
+
+  const handleChangeMemorySeverity = async (memory: MemoryEvent, severity: MemorySeverity) => {
+    const normalizedEvents = memoryEvents.map((item) =>
+      item.id === memory.id
+        ? {
+            ...item,
+            severity,
+            updated_at: new Date().toISOString(),
+          }
+        : item,
+    );
+    await persistMemoryEvents(normalizedEvents);
+  };
+
+  const handleUnlockBrain = async () => {
+    const passcode = brainPasscodeInput.trim();
+    if (!passcode || !profile?.settings?.brainPasscodeHash) return;
+
+    const hash = await hashText(passcode);
+    if (hash !== profile.settings.brainPasscodeHash) {
+      setError('透明大脑密码不正确');
+      return;
+    }
+
+    setBrainPasscodeInput('');
+    setError(null);
+    setIsBrainUnlocked(true);
+  };
+
+  const handleEnableBrainLock = async () => {
+    const passcode = brainPasscodeDraft.trim();
+    const recoveryQuestion = brainRecoveryQuestionDraft.trim();
+    const recoveryAnswer = normalizeRecoveryAnswer(brainRecoveryAnswerDraft);
+    if (passcode.length < 4) {
+      setError('透明大脑密码至少 4 位');
+      return;
+    }
+    if (!recoveryQuestion || !recoveryAnswer) {
+      setError('请设置一个验证问题和答案，避免忘记密码后无法找回');
+      return;
+    }
+
+    setIsSavingBrainLock(true);
+    setError(null);
+    try {
+      const base = profile || emptyProfile();
+      await persistProfile({
+        ...base,
+        settings: {
+          ...(base.settings || emptyProfile().settings),
+          brainLockEnabled: true,
+          brainPasscodeHash: await hashText(passcode),
+          brainRecoveryQuestion: recoveryQuestion,
+          brainRecoveryAnswerHash: await hashText(recoveryAnswer),
+        },
+      });
+      setBrainPasscodeDraft('');
+      setBrainRecoveryQuestionDraft('');
+      setBrainRecoveryAnswerDraft('');
+    } catch (lockError) {
+      setError(lockError instanceof Error ? lockError.message : '透明大脑密码保存失败');
+    } finally {
+      setIsSavingBrainLock(false);
+    }
+  };
+
+  const handleDisableBrainLock = async () => {
+    const passcode = brainDisablePasscode.trim();
+    if (!passcode || !profile?.settings?.brainPasscodeHash) {
+      setError('请先输入当前透明大脑密码');
+      return;
+    }
+
+    const hash = await hashText(passcode);
+    if (hash !== profile.settings.brainPasscodeHash) {
+      setError('当前透明大脑密码不正确');
+      return;
+    }
+
+    const base = profile || emptyProfile();
+    await persistProfile({
+      ...base,
+      settings: {
+        ...(base.settings || emptyProfile().settings),
+        brainLockEnabled: false,
+        brainPasscodeHash: '',
+        brainRecoveryQuestion: '',
+        brainRecoveryAnswerHash: '',
+      },
+    });
+    setBrainDisablePasscode('');
+    setIsBrainUnlocked(true);
+  };
+
+  const handleResetBrainLock = async () => {
+    const answer = normalizeRecoveryAnswer(brainRecoveryAnswerInput);
+    const nextPasscode = brainResetPasscodeDraft.trim();
+    setBrainRecoveryError('');
+    if (!profile?.settings?.brainRecoveryAnswerHash || !answer || nextPasscode.length < 4) {
+      setBrainRecoveryError('请填写验证答案，并设置至少 4 位的新密码');
+      return;
+    }
+
+    const answerHash = await hashText(answer);
+    if (answerHash !== profile.settings.brainRecoveryAnswerHash) {
+      setBrainRecoveryError('验证答案不正确，请重新输入');
+      return;
+    }
+
+    const base = profile || emptyProfile();
+    await persistProfile({
+      ...base,
+      settings: {
+        ...(base.settings || emptyProfile().settings),
+        brainLockEnabled: true,
+        brainPasscodeHash: await hashText(nextPasscode),
+      },
+    });
+    setBrainPasscodeInput('');
+    setBrainRecoveryAnswerInput('');
+    setBrainResetPasscodeDraft('');
+    setBrainRecoveryError('');
+    setIsBrainRecoveryOpen(false);
+    setIsBrainUnlocked(true);
+    setError(null);
   };
 
   const handleClearMemory = async () => {
@@ -806,7 +1090,7 @@ export default function App() {
                   </div>
                 ))
               )}
-              {isChatting && (
+              {isChatting && !streamingMessageId && (
                 <div className="flex justify-start">
                   <div className="w-7 h-7 rounded-full bg-[#FFF0E5] border border-[#FFE4D6] flex items-center justify-center shrink-0 mr-2 mt-auto mb-1">
                     <Dog size={16} className="text-[#F4A261] mt-0.5" strokeWidth={2.5} />
@@ -978,66 +1262,113 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-5">
-                <p className="text-xs text-[#8C8C8C] mb-6 leading-relaxed">
-                  这里是 DuoMi 记住的关于你的信息。你可以删除不需要的记忆，也可以标记“不准确”，DuoMi 会尽量不再这样记。
-                </p>
-
-                {!profile || (!profile.recent_mood && profile.key_facts.length === 0 && profile.current_stressors.length === 0 && profile.deep_fears.length === 0) ? (
-                  <div className="text-sm text-[#A0A0A0] italic bg-white p-5 rounded-2xl border border-[#F0EBE1] border-dashed text-center">
-                    <Dog size={24} className="mx-auto mb-2 opacity-50" />
-                    暂无记忆。<br />写一篇日记让 DuoMi 认识你吧。
+              {!isBrainUnlocked ? (
+                <div className="flex-1 flex flex-col justify-center p-5">
+                  <div className="bg-white rounded-2xl border border-[#F0EBE1] p-5 shadow-sm">
+                    <Lock size={26} className="text-[#F4A261] mb-4" />
+                    <h3 className="text-base font-bold text-[#3D3D3D] mb-2">透明大脑已上锁</h3>
+                    <p className="text-xs text-[#8C8C8C] leading-relaxed mb-4">
+                      这里包含 DuoMi 记住的私密信息。输入密码后可以查看、删除和调整记忆评级。
+                    </p>
+                    <input
+                      type="password"
+                      value={brainPasscodeInput}
+                      onChange={(event) => setBrainPasscodeInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') handleUnlockBrain();
+                      }}
+                      placeholder="输入透明大脑密码"
+                      className="w-full rounded-2xl border border-[#F0EBE1] bg-[#FDFBF7] px-4 py-3 text-sm outline-none focus:border-[#F4A261]"
+                    />
+                    <button
+                      onClick={handleUnlockBrain}
+                      disabled={!brainPasscodeInput.trim()}
+                      className="mt-3 w-full rounded-2xl bg-[#F4A261] py-3 text-sm font-bold text-white disabled:bg-[#F0D0B5]"
+                    >
+                      解锁
+                    </button>
                   </div>
-                ) : (
-                  <div className="space-y-6">
-                    {profile.recent_mood && (
-                      <div className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
-                        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-3">当下情绪</h3>
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF0E5] text-[#D96B52] rounded-xl text-sm font-semibold">
-                          {profile.recent_mood}
-                        </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex-1 overflow-y-auto p-5">
+                    <p className="text-xs text-[#8C8C8C] mb-6 leading-relaxed">
+                      这里是 DuoMi 记住的私密信息。你可以调整严重程度，等级越低越快淡出，DuoMi 也会更少提及。
+                    </p>
+
+                    {!profile || (!profile.recent_mood && memoryEvents.length === 0) ? (
+                      <div className="text-sm text-[#A0A0A0] italic bg-white p-5 rounded-2xl border border-[#F0EBE1] border-dashed text-center">
+                        <Dog size={24} className="mx-auto mb-2 opacity-50" />
+                        暂无记忆。<br />写一篇日记让 DuoMi 认识你吧。
+                      </div>
+                    ) : (
+                      <div className="space-y-5">
+                        {profile.recent_mood && (
+                          <div className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
+                            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-3">当下情绪</h3>
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF0E5] text-[#D96B52] rounded-xl text-sm font-semibold">
+                              {profile.recent_mood}
+                            </div>
+                          </div>
+                        )}
+
+                        {memoryEvents.length > 0 && (
+                          <div className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
+                            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-3">重要记忆</h3>
+                            <ul className="space-y-3">
+                              {memoryEvents.map((memory) => {
+                                const option = severityOptions.find((item) => item.value === memory.severity) || severityOptions[1];
+                                return (
+                                  <li key={memory.id} className="bg-[#FDFBF7] px-3 py-3 rounded-xl text-[#5C5C5C]">
+                                    <div className="flex items-start gap-2 text-sm leading-relaxed">
+                                      <ChevronRight size={14} className="text-[#F4A261] mt-0.5 shrink-0" />
+                                      <span className="flex-1">{memory.content}</span>
+                                    </div>
+                                    <div className="mt-3 rounded-xl bg-white border border-[#F0EBE1] p-2">
+                                      <div className="flex items-center justify-between gap-2 mb-2">
+                                        <span className="text-[11px] font-bold text-[#3D3D3D]">严重度：{option.label}</span>
+                                        <span className="text-[10px] text-[#A0A0A0]">{forgettingLabel(memory.severity)}</span>
+                                      </div>
+                                      <div className="grid grid-cols-5 gap-1">
+                                        {severityOptions.map((severity) => (
+                                          <button
+                                            key={severity.value}
+                                            type="button"
+                                            onClick={() => handleChangeMemorySeverity(memory, severity.value)}
+                                            className={`h-8 rounded-lg text-[11px] font-bold transition-colors ${
+                                              memory.severity === severity.value
+                                                ? 'bg-[#F4A261] text-white'
+                                                : 'bg-[#FDFBF7] text-[#A0A0A0] hover:text-[#F4A261]'
+                                            }`}
+                                            title={severity.description}
+                                          >
+                                            {severity.value}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <div className="flex justify-end gap-3 mt-2">
+                                      <button onClick={() => handleForgetMemory(memory, false)} className="text-[11px] text-[#A0A0A0] hover:text-[#D96B52]">删除</button>
+                                      <button onClick={() => handleForgetMemory(memory, true)} className="text-[11px] text-[#F4A261] hover:text-[#D96B52]">不准确</button>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     )}
-
-                    {[
-                      ['current_stressors', '核心压力源'],
-                      ['deep_fears', '深层担心'],
-                      ['key_facts', '关键经历'],
-                    ].map(([key, title]) => {
-                      const category = key as keyof Pick<UserProfile, 'key_facts' | 'current_stressors' | 'deep_fears'>;
-                      const items = profile[category] || [];
-                      if (items.length === 0) return null;
-
-                      return (
-                        <div key={key} className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
-                          <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-3">{title}</h3>
-                          <ul className="space-y-2">
-                            {items.map((item, i) => (
-                              <li key={`${item}-${i}`} className="text-sm bg-[#FDFBF7] px-3 py-2.5 rounded-xl text-[#5C5C5C] leading-relaxed">
-                                <div className="flex items-start gap-2">
-                                  <ChevronRight size={14} className="text-[#F4A261] mt-0.5 shrink-0" />
-                                  <span className="flex-1">{item}</span>
-                                </div>
-                                <div className="flex justify-end gap-2 mt-2">
-                                  <button onClick={() => handleForgetMemory(category, item, false)} className="text-[11px] text-[#A0A0A0] hover:text-[#D96B52]">删除</button>
-                                  <button onClick={() => handleForgetMemory(category, item, true)} className="text-[11px] text-[#F4A261] hover:text-[#D96B52]">不准确</button>
-                                </div>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      );
-                    })}
                   </div>
-                )}
-              </div>
 
-              <div className="p-5 border-t border-[#F0EBE1] bg-white">
-                <button onClick={handleClearMemory} className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-[#D96B52] bg-[#FFF0ED] hover:bg-[#FFE4DE] rounded-2xl transition-colors">
-                  <Trash2 size={16} />
-                  清空所有数据
-                </button>
-              </div>
+                  <div className="p-5 border-t border-[#F0EBE1] bg-white">
+                    <button onClick={handleClearMemory} className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-[#D96B52] bg-[#FFF0ED] hover:bg-[#FFE4DE] rounded-2xl transition-colors">
+                      <Trash2 size={16} />
+                      清空所有数据
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1111,6 +1442,120 @@ export default function App() {
                 <p className="text-xs text-[#8C8C8C] leading-relaxed">
                   你的日记、聊天和透明大脑会保存到 Supabase 云端，并通过账号隔离。AI 回应由服务端调用豆包生成，浏览器不会保存或暴露模型 API Key。
                 </p>
+                <div className="mt-4 rounded-2xl bg-[#FDFBF7] border border-[#F0EBE1] p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-bold text-[#3D3D3D]">透明大脑密码</div>
+                      <p className="mt-1 text-[11px] leading-relaxed text-[#8C8C8C]">
+                        开启后，每次打开透明大脑都需要先输入密码。
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={isBrainLockEnabled ? handleDisableBrainLock : handleEnableBrainLock}
+                      disabled={
+                        !isBrainLockEnabled
+                        && (
+                          isSavingBrainLock
+                          || brainPasscodeDraft.trim().length < 4
+                          || !brainRecoveryQuestionDraft
+                          || !brainRecoveryAnswerDraft.trim()
+                        )
+                      }
+                      className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors ${
+                        isBrainLockEnabled
+                          ? 'bg-[#FFF0ED] text-[#D96B52]'
+                          : 'bg-[#F4A261] text-white disabled:bg-[#F0D0B5]'
+                      }`}
+                    >
+                      {isBrainLockEnabled ? '关闭' : isSavingBrainLock ? '保存中' : '开启'}
+                    </button>
+                  </div>
+                  {isBrainLockEnabled ? (
+                    <div className="mt-3 space-y-2">
+                      <input
+                        type="password"
+                        value={brainDisablePasscode}
+                        onChange={(event) => setBrainDisablePasscode(event.target.value)}
+                        placeholder="输入当前密码后才可关闭"
+                        className="w-full rounded-xl border border-[#F0EBE1] bg-white px-3 py-2.5 text-xs outline-none focus:border-[#F4A261]"
+                      />
+                      {canRecoverBrainPasscode && (
+                        <button
+                          type="button"
+                          onClick={() => setIsBrainRecoveryOpen((value) => !value)}
+                          className="text-[11px] font-bold text-[#F4A261]"
+                        >
+                          忘记密码
+                        </button>
+                      )}
+                      {isBrainRecoveryOpen && (
+                        <div className="rounded-xl border border-[#F0EBE1] bg-white p-3 space-y-2">
+                          <div className="text-[11px] font-bold text-[#3D3D3D]">{brainRecoveryQuestion}</div>
+                          <input
+                            value={brainRecoveryAnswerInput}
+                            onChange={(event) => {
+                              setBrainRecoveryAnswerInput(event.target.value);
+                              setBrainRecoveryError('');
+                            }}
+                            placeholder="输入验证答案"
+                            className="w-full rounded-lg border border-[#F0EBE1] bg-[#FDFBF7] px-3 py-2 text-xs outline-none focus:border-[#F4A261]"
+                          />
+                          <input
+                            type="password"
+                            value={brainResetPasscodeDraft}
+                            onChange={(event) => {
+                              setBrainResetPasscodeDraft(event.target.value);
+                              setBrainRecoveryError('');
+                            }}
+                            placeholder="设置新的至少 4 位密码"
+                            className="w-full rounded-lg border border-[#F0EBE1] bg-[#FDFBF7] px-3 py-2 text-xs outline-none focus:border-[#F4A261]"
+                          />
+                          {brainRecoveryError && (
+                            <p className="rounded-lg bg-[#FFF0ED] px-3 py-2 text-[11px] font-medium text-[#D96B52]">
+                              {brainRecoveryError}
+                            </p>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleResetBrainLock}
+                            className="w-full rounded-lg bg-[#F4A261] py-2 text-xs font-bold text-white"
+                          >
+                            验证并重置密码
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-2">
+                      <input
+                        type="password"
+                        value={brainPasscodeDraft}
+                        onChange={(event) => setBrainPasscodeDraft(event.target.value)}
+                        placeholder="设置至少 4 位密码"
+                        className="w-full rounded-xl border border-[#F0EBE1] bg-white px-3 py-2.5 text-xs outline-none focus:border-[#F4A261]"
+                      />
+                      <select
+                        value={brainRecoveryQuestionDraft}
+                        onChange={(event) => setBrainRecoveryQuestionDraft(event.target.value)}
+                        className="w-full rounded-xl border border-[#F0EBE1] bg-white px-3 py-2.5 text-xs outline-none focus:border-[#F4A261]"
+                      >
+                        <option value="">选择一个验证问题</option>
+                        {brainRecoveryQuestions.map((question) => (
+                          <option key={question} value={question}>
+                            {question}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={brainRecoveryAnswerDraft}
+                        onChange={(event) => setBrainRecoveryAnswerDraft(event.target.value)}
+                        placeholder="验证答案"
+                        className="w-full rounded-xl border border-[#F0EBE1] bg-white px-3 py-2.5 text-xs outline-none focus:border-[#F4A261]"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-[#F0EBE1]">

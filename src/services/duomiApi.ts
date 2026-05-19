@@ -1,17 +1,21 @@
 import type { ChatMessage, ChatRuntimeContext, DiaryEntry, UserProfile } from '../types';
 import { supabase } from './supabaseClient';
 
-async function postJson<TResponse>(url: string, body: unknown): Promise<TResponse> {
+async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
 
+  return {
+    'Content-Type': 'application/json',
+    ...(data.session?.access_token ? { Authorization: `Bearer ${data.session.access_token}` } : {}),
+  };
+}
+
+async function postJson<TResponse>(url: string, body: unknown): Promise<TResponse> {
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(data.session?.access_token ? { Authorization: `Bearer ${data.session.access_token}` } : {}),
-      },
+      headers: await getAuthHeaders(),
       body: JSON.stringify(body),
     });
   } catch {
@@ -27,6 +31,53 @@ async function postJson<TResponse>(url: string, body: unknown): Promise<TRespons
   }
 
   return payload as TResponse;
+}
+
+async function postTextStream(url: string, body: unknown, onDelta: (delta: string) => void): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error('DuoMi 连接失败：请确认本地服务已启动，或稍后再试');
+  }
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    if (!payload && response.status === 404) {
+      throw new Error('DuoMi 的本地 API 没有启动。请使用 npm run dev:vercel，而不是 npm run dev');
+    }
+    throw new Error(payload?.error || 'DuoMi 暂时没有连上，请稍后再试');
+  }
+  if (!response.body) {
+    throw new Error('DuoMi 暂时没有返回可读取的响应');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const delta = decoder.decode(value, { stream: true });
+    if (delta) {
+      fullText += delta;
+      onDelta(delta);
+    }
+  }
+
+  const remaining = decoder.decode();
+  if (remaining) {
+    fullText += remaining;
+    onDelta(remaining);
+  }
+
+  return fullText.trim();
 }
 
 function toLocalDateKey(date: Date): string {
@@ -71,13 +122,34 @@ export async function sendCompanionMessage(
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'local',
   };
 
-  const response = await postJson<{ message: string }>('/api/chat', {
+  return postTextStream('/api/chat', {
     profile,
     history,
     message,
     relatedDiaryEntries,
     runtimeContext,
-  });
+  }, () => undefined);
+}
 
-  return response.message;
+export async function streamCompanionMessage(
+  profile: UserProfile | null,
+  history: ChatMessage[],
+  message: string,
+  relatedDiaryEntries: DiaryEntry[],
+  onDelta: (delta: string) => void,
+): Promise<string> {
+  const now = new Date();
+  const runtimeContext: ChatRuntimeContext = {
+    currentDate: toLocalDateKey(now),
+    currentDateTime: now.toISOString(),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'local',
+  };
+
+  return postTextStream('/api/chat', {
+    profile,
+    history,
+    message,
+    relatedDiaryEntries,
+    runtimeContext,
+  }, onDelta);
 }

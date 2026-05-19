@@ -1,4 +1,4 @@
-import type { ChatConversation, ChatMessage, DiaryEntry, Mood, UserProfile, UserSettings } from '../types';
+import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, UserProfile, UserSettings } from '../types';
 import { supabase } from './supabaseClient';
 
 type DiaryRow = {
@@ -29,10 +29,11 @@ type ChatConversationRow = {
 
 const emptyProfile = (): UserProfile => ({
   key_facts: [],
-  recent_mood: '',
-  current_stressors: [],
-  deep_fears: [],
-  rejected_memories: [],
+    recent_mood: '',
+    current_stressors: [],
+    deep_fears: [],
+    memory_events: [],
+    rejected_memories: [],
   settings: {
     responseTone: 'mature',
   },
@@ -51,7 +52,31 @@ function normalizeSettings(settings: Partial<UserSettings> | null | undefined): 
     responseTone: normalizedTone,
     customToneRequest: typeof settings?.customToneRequest === 'string' ? settings.customToneRequest : '',
     customTonePrompt: typeof settings?.customTonePrompt === 'string' ? settings.customTonePrompt : '',
+    brainLockEnabled: settings?.brainLockEnabled === true,
+    brainPasscodeHash: typeof settings?.brainPasscodeHash === 'string' ? settings.brainPasscodeHash : '',
+    brainRecoveryQuestion: typeof settings?.brainRecoveryQuestion === 'string' ? settings.brainRecoveryQuestion : '',
+    brainRecoveryAnswerHash: typeof settings?.brainRecoveryAnswerHash === 'string' ? settings.brainRecoveryAnswerHash : '',
   };
+}
+
+function normalizeSeverity(value: unknown): MemorySeverity {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : 2;
+}
+
+function normalizeMemoryEvents(events: unknown): MemoryEvent[] {
+  if (!Array.isArray(events)) return [];
+
+  return events
+    .filter((event): event is Partial<MemoryEvent> => typeof event === 'object' && event !== null)
+    .map((event, index) => ({
+      id: typeof event.id === 'string' && event.id ? event.id : `memory-${Date.now()}-${index}`,
+      content: typeof event.content === 'string' ? event.content.trim() : '',
+      severity: normalizeSeverity(event.severity),
+      source: event.source,
+      created_at: typeof event.created_at === 'string' ? event.created_at : undefined,
+      updated_at: typeof event.updated_at === 'string' ? event.updated_at : undefined,
+    }))
+    .filter((event) => event.content);
 }
 
 function normalizeProfile(profile: Partial<UserProfile> | null | undefined): UserProfile {
@@ -61,6 +86,7 @@ function normalizeProfile(profile: Partial<UserProfile> | null | undefined): Use
     key_facts: Array.isArray(profile?.key_facts) ? profile.key_facts : [],
     current_stressors: Array.isArray(profile?.current_stressors) ? profile.current_stressors : [],
     deep_fears: Array.isArray(profile?.deep_fears) ? profile.deep_fears : [],
+    memory_events: normalizeMemoryEvents(profile?.memory_events),
     rejected_memories: Array.isArray(profile?.rejected_memories) ? profile.rejected_memories : [],
     recent_mood: typeof profile?.recent_mood === 'string' ? profile.recent_mood : '',
     settings: normalizeSettings(profile?.settings),
