@@ -12,7 +12,8 @@ DuoMi 是一个私密心理陪伴与日记 App，使用 Vercel、Supabase 和火
 - 记忆评级：重要记忆按 1 到 5 级管理，等级会影响 DuoMi 提及该事件的频率和强度。
 - 烦恼遗忘曲线：低严重度记忆会更快淡出模型上下文，普通烦躁和短期吐槽不会轻易被旧事件绑定。
 - 隐私锁：透明大脑可选密码保护；关闭密码需要当前密码；忘记密码可通过预设验证问题重置。
-- 安全边界：心理支持提示词覆盖诊断边界、危机场景、低风险自助练习和记忆使用规则。
+- 日记背景上下文：写日记时自动获取当天天气（Open-Meteo）和城市级地点（OpenStreetMap Nominatim），不保存经纬度。
+- 安全边界：心理支持提示词覆盖诊断边界、危机场景、低风险自助练习和记忆使用规则；天气和地点只作为背景事实，不用于心理状态的因果归因。
 
 ## 本地运行
 
@@ -65,7 +66,7 @@ DuoMi 是一个私密心理陪伴与日记 App，使用 Vercel、Supabase 和火
 执行 `supabase/schema.sql` 会创建或更新：
 
 - `profiles`
-- `diary_entries`
+- `diary_entries`（含 `weather` 和 `place` JSONB 字段，存储天气快照和城市级地点）
 - `chat_conversations`
 - `chat_messages`
 
@@ -117,7 +118,8 @@ DuoMi 不应该为了显得“记得你”而频繁翻旧账。当前策略是�
 ## AI 路由
 
 - `api/chat.ts`：聊天回复，返回 `text/plain` 流。
-- `api/extract-profile.ts`：根据日记更新画像。
+- `api/extract-profile.ts`：根据日记更新画像，接收天气/地点作为辅助上下文。
+- `api/diary-context.ts`：根据浏览器 IP 获取天气（Open-Meteo）和城市级地点（Nominatim），用于日记背景。
 - `api/polish-tone.ts`：把用户自定义语气整理成可执行提示词。
 - `api/_lib/aiProvider.ts`：豆包调用、流式解析、记忆召回、画像归一化。
 - `api/_lib/supportPlaybook.ts`：心理陪伴安全知识库。
