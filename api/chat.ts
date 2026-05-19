@@ -1,6 +1,6 @@
 import { getAiProvider } from './_lib/aiProvider';
 import { requireUser } from './_lib/auth';
-import type { ChatMessage, DiaryEntry, UserProfile } from '../src/types';
+import type { ChatMessage, ChatRuntimeContext, DiaryEntry, UserProfile } from '../src/types';
 
 type ApiRequest = {
   method?: string;
@@ -20,7 +20,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     await requireUser(req);
-    const { profile, history, message, relatedDiaryEntries } = req.body || {};
+    const { profile, history, message, relatedDiaryEntries, runtimeContext } = req.body || {};
     if (typeof message !== 'string' || !message.trim()) {
       res.status(400).json({ error: '消息不能为空' });
       return;
@@ -31,6 +31,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       (Array.isArray(history) ? history : []) as ChatMessage[],
       message,
       (Array.isArray(relatedDiaryEntries) ? relatedDiaryEntries : []) as DiaryEntry[],
+      (runtimeContext || null) as ChatRuntimeContext | null,
     );
 
     res.status(200).json({ message: reply });

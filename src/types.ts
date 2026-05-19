@@ -1,8 +1,10 @@
 export type Mood = 'happy' | 'angry' | 'sad' | 'naughty' | 'surprised' | 'sleepy' | 'shy' | 'proud' | 'scared';
-export type ResponseTone = 'mature' | 'gentle' | 'direct' | 'reflective';
+export type ResponseTone = 'mature' | 'gentle' | 'direct' | 'reflective' | 'cuddly' | 'custom';
 
 export interface UserSettings {
   responseTone: ResponseTone;
+  customToneRequest?: string;
+  customTonePrompt?: string;
 }
 
 export interface UserProfile {
@@ -40,6 +42,12 @@ export interface DiaryEntry {
   mood?: Mood;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ChatRuntimeContext {
+  currentDate: string;
+  currentDateTime: string;
+  timeZone: string;
 }
 
 export interface ProfileRecord {

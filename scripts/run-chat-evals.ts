@@ -91,6 +91,10 @@ function checkFlags(testCase: EvalCase, reply: string): string[] {
     flags.push('irrelevant_memory_in_diagnosis');
   }
 
+  if (testCase.id === 'greeting_no_stale_memory' && /开会|会议|没被认真|不被认真|委屈|疲惫/.test(reply)) {
+    flags.push('stale_memory_in_greeting');
+  }
+
   return flags;
 }
 
@@ -106,6 +110,11 @@ async function main() {
         [],
         testCase.userMessage,
         relatedDiaryEntries,
+        {
+          currentDate: '2026-05-19',
+          currentDateTime: '2026-05-19T14:00:00.000+08:00',
+          timeZone: 'Asia/Shanghai',
+        },
       );
       results.push({ ...testCase, reply, flags: checkFlags(testCase, reply) });
       process.stdout.write('ok\n');

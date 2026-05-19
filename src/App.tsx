@@ -35,7 +35,7 @@ import {
   saveProfile,
   updateDiaryEntry,
 } from './services/dataService';
-import { extractProfile, sendCompanionMessage } from './services/duomiApi';
+import { extractProfile, polishCustomTone, sendCompanionMessage } from './services/duomiApi';
 import { isSupabaseConfigured, supabase } from './services/supabaseClient';
 import type { ChatConversation, ChatMessage, DiaryEntry, Mood, ResponseTone, UserProfile } from './types';
 
@@ -69,6 +69,8 @@ const responseToneOptions: Array<{ value: ResponseTone; label: string; descripti
   { value: 'gentle', label: '温柔陪伴', description: '更柔和地承接情绪' },
   { value: 'direct', label: '直接清晰', description: '少铺垫，给明确建议' },
   { value: 'reflective', label: '分析反思', description: '帮助梳理触发点和需求' },
+  { value: 'cuddly', label: '绒绒陪伴', description: '可爱、亲近、带一点小狗感' },
+  { value: 'custom', label: '专属定制', description: '按你的描述生成语气' },
 ];
 
 function SetupScreen() {
@@ -229,6 +231,7 @@ export default function App() {
 
   const [isExtracting, setIsExtracting] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isSavingCustomTone, setIsSavingCustomTone] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const [dogState, setDogState] = useState<'listening' | 'recording' | 'thinking' | 'responding'>('listening');
@@ -238,10 +241,17 @@ export default function App() {
   const chatInputRef = useRef<HTMLInputElement>(null);
   const userId = session?.user.id || '';
   const selectedResponseTone = profile?.settings?.responseTone || 'mature';
+  const [customToneDraft, setCustomToneDraft] = useState('');
   const activeConversation = useMemo(
     () => chatConversations.find((conversation) => conversation.id === activeConversationId) || null,
     [activeConversationId, chatConversations],
   );
+
+  useEffect(() => {
+    if (isSettingsOpen) {
+      setCustomToneDraft(profile?.settings?.customToneRequest || '');
+    }
+  }, [isSettingsOpen, profile?.settings?.customToneRequest]);
 
   useEffect(() => {
     if (!supabase) {
@@ -371,6 +381,32 @@ export default function App() {
       await persistProfile(nextProfile);
     } catch (settingsError) {
       setError(settingsError instanceof Error ? settingsError.message : '语气设置保存失败');
+    }
+  };
+
+  const handleSaveCustomTone = async () => {
+    const userRequest = customToneDraft.trim();
+    if (!userRequest || isSavingCustomTone) return;
+
+    setIsSavingCustomTone(true);
+    setError(null);
+    try {
+      const customTonePrompt = await polishCustomTone(userRequest);
+      const base = profile || emptyProfile();
+      const nextProfile: UserProfile = {
+        ...base,
+        settings: {
+          ...(base.settings || emptyProfile().settings),
+          responseTone: 'custom',
+          customToneRequest: userRequest,
+          customTonePrompt,
+        },
+      };
+      await persistProfile(nextProfile);
+    } catch (settingsError) {
+      setError(settingsError instanceof Error ? settingsError.message : '专属语气保存失败');
+    } finally {
+      setIsSavingCustomTone(false);
     }
   };
 
@@ -1029,7 +1065,7 @@ export default function App() {
                         key={option.value}
                         type="button"
                         onClick={() => handleChangeResponseTone(option.value)}
-                        className={`text-left rounded-2xl border p-3 transition-colors ${
+                        className={`h-[104px] text-left rounded-2xl border p-3 transition-colors ${
                           isSelected
                             ? 'border-[#F4A261] bg-[#FFF4EC] text-[#3D3D3D]'
                             : 'border-[#F0EBE1] bg-[#FDFBF7] text-[#5F5F5F] hover:border-[#F4C08A]'
@@ -1041,6 +1077,30 @@ export default function App() {
                     );
                   })}
                 </div>
+                {selectedResponseTone === 'custom' && (
+                  <div className="mt-4 space-y-3">
+                    <textarea
+                      value={customToneDraft}
+                      onChange={(event) => setCustomToneDraft(event.target.value)}
+                      rows={4}
+                      maxLength={600}
+                      placeholder="例如：像一个很懂我的朋友，语气轻松一点，可以幽默，但不要太鸡汤。"
+                      className="w-full resize-none rounded-2xl border border-[#F0EBE1] bg-[#FDFBF7] px-3 py-3 text-xs leading-relaxed text-[#3D3D3D] outline-none transition-colors placeholder:text-[#B8B8B8] focus:border-[#F4A261]"
+                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-[#A0A0A0]">{customToneDraft.trim().length}/600</span>
+                      <button
+                        type="button"
+                        onClick={handleSaveCustomTone}
+                        disabled={isSavingCustomTone || !customToneDraft.trim()}
+                        className="inline-flex items-center gap-2 rounded-full bg-[#F4A261] px-4 py-2 text-xs font-bold text-white shadow-sm transition-opacity disabled:opacity-50"
+                      >
+                        {isSavingCustomTone && <Loader2 size={13} className="animate-spin" />}
+                        生成并保存
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-[#F0EBE1]">

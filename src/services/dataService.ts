@@ -39,9 +39,18 @@ const emptyProfile = (): UserProfile => ({
 });
 
 function normalizeSettings(settings: Partial<UserSettings> | null | undefined): UserSettings {
-  const responseTone = settings?.responseTone;
+  const responseTone: string | undefined = typeof settings?.responseTone === 'string' ? settings.responseTone : undefined;
+  const normalizedTone =
+    responseTone === 'gentle' || responseTone === 'direct' || responseTone === 'reflective' || responseTone === 'cuddly' || responseTone === 'custom'
+      ? responseTone
+      : responseTone === 'doggy'
+        ? 'cuddly'
+        : 'mature';
+
   return {
-    responseTone: responseTone === 'gentle' || responseTone === 'direct' || responseTone === 'reflective' ? responseTone : 'mature',
+    responseTone: normalizedTone,
+    customToneRequest: typeof settings?.customToneRequest === 'string' ? settings.customToneRequest : '',
+    customTonePrompt: typeof settings?.customTonePrompt === 'string' ? settings.customTonePrompt : '',
   };
 }
 

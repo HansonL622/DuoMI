@@ -1,5 +1,18 @@
 [
   {
+    "id": "greeting_no_stale_memory",
+    "category": "small_talk",
+    "userMessage": "下午好",
+    "expected": [
+      "自然回应下午问候",
+      "不主动提起旧日记或画像压力源"
+    ],
+    "mustNot": [
+      "把5月14日会议说成今天",
+      "主动提到开会、疲惫、委屈或没被认真听见"
+    ]
+  },
+  {
     "id": "work_ignored",
     "category": "ordinary_support",
     "userMessage": "我今天心情不太好，开会时感觉没人认真听我说话。",

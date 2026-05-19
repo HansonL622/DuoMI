@@ -1,4 +1,4 @@
-import type { ChatMessage, DiaryEntry, UserProfile } from '../types';
+import type { ChatMessage, ChatRuntimeContext, DiaryEntry, UserProfile } from '../types';
 import { supabase } from './supabaseClient';
 
 async function postJson<TResponse>(url: string, body: unknown): Promise<TResponse> {
@@ -29,6 +29,13 @@ async function postJson<TResponse>(url: string, body: unknown): Promise<TRespons
   return payload as TResponse;
 }
 
+function toLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export async function extractProfile(
   currentProfile: UserProfile | null,
   diaryContent: string,
@@ -43,17 +50,33 @@ export async function extractProfile(
   return response.profile;
 }
 
+export async function polishCustomTone(userRequest: string): Promise<string> {
+  const response = await postJson<{ prompt: string }>('/api/polish-tone', {
+    userRequest,
+  });
+
+  return response.prompt;
+}
+
 export async function sendCompanionMessage(
   profile: UserProfile | null,
   history: ChatMessage[],
   message: string,
   relatedDiaryEntries: DiaryEntry[],
 ): Promise<string> {
+  const now = new Date();
+  const runtimeContext: ChatRuntimeContext = {
+    currentDate: toLocalDateKey(now),
+    currentDateTime: now.toISOString(),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'local',
+  };
+
   const response = await postJson<{ message: string }>('/api/chat', {
     profile,
     history,
     message,
     relatedDiaryEntries,
+    runtimeContext,
   });
 
   return response.message;
