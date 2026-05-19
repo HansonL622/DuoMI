@@ -17,9 +17,19 @@ export interface UserProfile {
 
 export interface ChatMessage {
   id?: string;
+  conversation_id?: string;
   role: 'user' | 'model';
   content: string;
   created_at?: string;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at?: string;
+  message_count?: number;
 }
 
 export interface DiaryEntry {

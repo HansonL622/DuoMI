@@ -1,4 +1,4 @@
-import type { ChatMessage, DiaryEntry, Mood, UserProfile, UserSettings } from '../types';
+import type { ChatConversation, ChatMessage, DiaryEntry, Mood, UserProfile, UserSettings } from '../types';
 import { supabase } from './supabaseClient';
 
 type DiaryRow = {
@@ -12,9 +12,19 @@ type DiaryRow = {
 
 type ChatRow = {
   id: string;
+  conversation_id: string | null;
   role: ChatMessage['role'];
   content: string;
   created_at: string;
+};
+
+type ChatConversationRow = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at: string | null;
+  message_count: number | null;
 };
 
 const emptyProfile = (): UserProfile => ({
@@ -151,34 +161,87 @@ export async function deleteDiaryEntry(id: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function listChatMessages(): Promise<ChatMessage[]> {
+function toChatConversation(row: ChatConversationRow): ChatConversation {
+  return {
+    id: row.id,
+    title: row.title,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_message_at: row.last_message_at || undefined,
+    message_count: row.message_count || 0,
+  };
+}
+
+export async function listChatConversations(): Promise<ChatConversation[]> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('chat_conversations')
+    .select('id,title,created_at,updated_at,last_message_at,message_count')
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false });
+
+  if (error) throw error;
+  return ((data || []) as ChatConversationRow[]).map(toChatConversation);
+}
+
+export async function createChatConversation(title: string): Promise<ChatConversation> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('chat_conversations')
+    .insert({ title })
+    .select('id,title,created_at,updated_at,last_message_at,message_count')
+    .single();
+
+  if (error) throw error;
+  return toChatConversation(data as ChatConversationRow);
+}
+
+export async function deleteChatConversation(id: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.from('chat_conversations').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function listChatMessages(conversationId: string): Promise<ChatMessage[]> {
   const client = requireSupabase();
   const { data, error } = await client
     .from('chat_messages')
     .select('*')
+    .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
     .limit(100);
 
   if (error) throw error;
   return ((data || []) as ChatRow[]).map((row) => ({
     id: row.id,
+    conversation_id: row.conversation_id || undefined,
     role: row.role,
     content: row.content,
     created_at: row.created_at,
   }));
 }
 
-export async function createChatMessage(role: ChatMessage['role'], content: string): Promise<ChatMessage> {
+export async function createChatMessage(conversationId: string, role: ChatMessage['role'], content: string): Promise<ChatMessage> {
   const client = requireSupabase();
   const { data, error } = await client
     .from('chat_messages')
-    .insert({ role, content })
+    .insert({ conversation_id: conversationId, role, content })
     .select('*')
     .single();
 
   if (error) throw error;
+
+  await client
+    .from('chat_conversations')
+    .update({
+      last_message_at: data.created_at,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', conversationId);
+
   return {
     id: data.id,
+    conversation_id: data.conversation_id,
     role: data.role,
     content: data.content,
     created_at: data.created_at,
@@ -187,12 +250,13 @@ export async function createChatMessage(role: ChatMessage['role'], content: stri
 
 export async function clearAllUserData(userId: string): Promise<void> {
   const client = requireSupabase();
-  const [diary, chat, profile] = await Promise.all([
+  const [diary, chat, conversations, profile] = await Promise.all([
     client.from('diary_entries').delete().eq('user_id', userId),
     client.from('chat_messages').delete().eq('user_id', userId),
+    client.from('chat_conversations').delete().eq('user_id', userId),
     client.from('profiles').delete().eq('user_id', userId),
   ]);
 
-  const error = diary.error || chat.error || profile.error;
+  const error = diary.error || chat.error || conversations.error || profile.error;
   if (error) throw error;
 }

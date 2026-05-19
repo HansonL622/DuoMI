@@ -9,7 +9,10 @@ import {
   LogOut,
   Mail,
   MessageCircle,
+  MessageSquare,
+  PanelLeft,
   Pencil,
+  Plus,
   Send,
   ShieldCheck,
   Trash2,
@@ -20,10 +23,13 @@ import { DuoMiStage } from './components/DuoMiStage';
 import { DuoMiFace } from './components/DuoMiFace';
 import {
   clearAllUserData,
+  createChatConversation,
   createChatMessage,
   createDiaryEntry,
+  deleteChatConversation,
   deleteDiaryEntry,
   getOrCreateProfile,
+  listChatConversations,
   listChatMessages,
   listDiaryEntries,
   saveProfile,
@@ -31,7 +37,7 @@ import {
 } from './services/dataService';
 import { extractProfile, sendCompanionMessage } from './services/duomiApi';
 import { isSupabaseConfigured, supabase } from './services/supabaseClient';
-import type { ChatMessage, DiaryEntry, Mood, ResponseTone, UserProfile } from './types';
+import type { ChatConversation, ChatMessage, DiaryEntry, Mood, ResponseTone, UserProfile } from './types';
 
 const moods: Mood[] = ['happy', 'angry', 'sad', 'naughty', 'surprised', 'sleepy', 'shy', 'proud', 'scared'];
 
@@ -206,7 +212,11 @@ export default function App() {
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [diaryEntries, setDiaryEntries] = useState<DiaryEntry[]>([]);
+  const [chatConversations, setChatConversations] = useState<ChatConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(false);
+  const [isLoadingChatMessages, setIsLoadingChatMessages] = useState(false);
 
   const [diaryInput, setDiaryInput] = useState('');
   const [chatInput, setChatInput] = useState('');
@@ -228,6 +238,10 @@ export default function App() {
   const chatInputRef = useRef<HTMLInputElement>(null);
   const userId = session?.user.id || '';
   const selectedResponseTone = profile?.settings?.responseTone || 'mature';
+  const activeConversation = useMemo(
+    () => chatConversations.find((conversation) => conversation.id === activeConversationId) || null,
+    [activeConversationId, chatConversations],
+  );
 
   useEffect(() => {
     if (!supabase) {
@@ -251,6 +265,8 @@ export default function App() {
     if (!session) {
       setProfile(null);
       setDiaryEntries([]);
+      setChatConversations([]);
+      setActiveConversationId(null);
       setChatHistory([]);
       return;
     }
@@ -262,13 +278,19 @@ export default function App() {
     Promise.all([
       getOrCreateProfile(session.user.id),
       listDiaryEntries(),
-      listChatMessages(),
+      listChatConversations().catch((conversationError) => {
+        console.warn('Chat conversations are not available yet.', conversationError);
+        setError('聊天会话表还没有同步到 Supabase；日记和基础数据已正常加载。');
+        return [];
+      }),
     ])
-      .then(([nextProfile, nextEntries, nextMessages]) => {
+      .then(([nextProfile, nextEntries, nextConversations]) => {
         if (!isActive) return;
         setProfile(nextProfile);
         setDiaryEntries(nextEntries);
-        setChatHistory(nextMessages);
+        setChatConversations(nextConversations);
+        setActiveConversationId(null);
+        setChatHistory([]);
       })
       .catch((loadError) => {
         if (!isActive) return;
@@ -299,6 +321,33 @@ export default function App() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory]);
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      setChatHistory([]);
+      return;
+    }
+    if (isChatting) return;
+
+    let isActive = true;
+    setIsLoadingChatMessages(true);
+    setError(null);
+
+    listChatMessages(activeConversationId)
+      .then((messages) => {
+        if (isActive) setChatHistory(messages);
+      })
+      .catch((loadError) => {
+        if (isActive) setError(loadError instanceof Error ? loadError.message : '聊天记录加载失败');
+      })
+      .finally(() => {
+        if (isActive) setIsLoadingChatMessages(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [activeConversationId, isChatting]);
 
   const relatedDiaryEntries = useMemo(() => diaryEntries.slice(0, 8), [diaryEntries]);
 
@@ -401,6 +450,48 @@ export default function App() {
     }
   };
 
+  const makeConversationTitle = (message: string) => {
+    const compact = message.replace(/\s+/g, ' ').trim();
+    return compact.length > 18 ? `${compact.slice(0, 18)}...` : compact || '新的对话';
+  };
+
+  const handleNewConversation = () => {
+    setActiveConversationId(null);
+    setChatHistory([]);
+    setChatInput('');
+    setIsChatSidebarOpen(false);
+    setActiveTab('chat');
+    setTimeout(() => chatInputRef.current?.focus(), 0);
+  };
+
+  const handleSelectConversation = (conversationId: string) => {
+    if (conversationId === activeConversationId) {
+      setIsChatSidebarOpen(false);
+      return;
+    }
+
+    setActiveConversationId(conversationId);
+    setChatInput('');
+    setIsChatSidebarOpen(false);
+    setActiveTab('chat');
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    if (!window.confirm('确定要删除这个对话吗？')) return;
+    setError(null);
+
+    try {
+      await deleteChatConversation(conversationId);
+      setChatConversations((prev) => prev.filter((conversation) => conversation.id !== conversationId));
+      if (activeConversationId === conversationId) {
+        setActiveConversationId(null);
+        setChatHistory([]);
+      }
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : '对话删除失败');
+    }
+  };
+
   const handleSendMessage = async () => {
     const userMsg = chatInput.trim();
     if (!userMsg || isChatting) return;
@@ -411,13 +502,35 @@ export default function App() {
     setError(null);
 
     try {
-      const savedUserMessage = await createChatMessage('user', userMsg);
+      let conversationId = activeConversationId;
+      if (!conversationId) {
+        const createdConversation = await createChatConversation(makeConversationTitle(userMsg));
+        conversationId = createdConversation.id;
+        setActiveConversationId(createdConversation.id);
+        setChatConversations((prev) => [createdConversation, ...prev]);
+      }
+
+      const savedUserMessage = await createChatMessage(conversationId, 'user', userMsg);
       const nextHistory = [...chatHistory, savedUserMessage];
       setChatHistory(nextHistory);
 
       const response = await sendCompanionMessage(profile, nextHistory, userMsg, relatedDiaryEntries);
-      const savedModelMessage = await createChatMessage('model', response);
+      const savedModelMessage = await createChatMessage(conversationId, 'model', response);
       setChatHistory((prev) => [...prev, savedModelMessage]);
+      setChatConversations((prev) =>
+        prev
+          .map((conversation) =>
+            conversation.id === conversationId
+              ? {
+                  ...conversation,
+                  last_message_at: savedModelMessage.created_at,
+                  updated_at: savedModelMessage.created_at || new Date().toISOString(),
+                  message_count: (conversation.message_count || 0) + 2,
+                }
+              : conversation,
+          )
+          .sort((a, b) => new Date(b.last_message_at || b.updated_at).getTime() - new Date(a.last_message_at || a.updated_at).getTime()),
+      );
     } catch (chatError) {
       setChatInput(userMsg);
       setError(chatError instanceof Error ? chatError.message : 'DuoMi 暂时没有回应');
@@ -448,6 +561,8 @@ export default function App() {
       await saveProfile(userId, freshProfile);
       setProfile(freshProfile);
       setDiaryEntries([]);
+      setChatConversations([]);
+      setActiveConversationId(null);
       setChatHistory([]);
       setIsBrainOpen(false);
     } catch (clearError) {
@@ -485,12 +600,24 @@ export default function App() {
               <span className="text-[9px] text-[#A0A0A0] font-medium leading-tight pt-0.5">私密陪伴</span>
             </div>
           </button>
-          <button
-            onClick={() => setIsBrainOpen(true)}
-            className="w-10 h-10 rounded-full bg-white/80 backdrop-blur-md shadow-sm border border-white flex items-center justify-center text-[#8C8C8C] hover:text-[#F4A261] hover:bg-[#FFF0E5] transition-colors pointer-events-auto"
-          >
-            <Brain size={18} />
-          </button>
+          <div className="flex items-center gap-2 pointer-events-auto">
+            {activeTab === 'chat' && (
+              <button
+                onClick={() => setIsChatSidebarOpen(true)}
+                className="w-10 h-10 rounded-full bg-white/80 backdrop-blur-md shadow-sm border border-white flex items-center justify-center text-[#8C8C8C] hover:text-[#F4A261] hover:bg-[#FFF0E5] transition-colors"
+                aria-label="打开对话列表"
+              >
+                <PanelLeft size={18} />
+              </button>
+            )}
+            <button
+              onClick={() => setIsBrainOpen(true)}
+              className="w-10 h-10 rounded-full bg-white/80 backdrop-blur-md shadow-sm border border-white flex items-center justify-center text-[#8C8C8C] hover:text-[#F4A261] hover:bg-[#FFF0E5] transition-colors"
+              aria-label="打开透明的大脑"
+            >
+              <Brain size={18} />
+            </button>
+          </div>
         </header>
 
         {error && (
@@ -600,11 +727,34 @@ export default function App() {
               />
             </div>
 
+            <div className="px-5 pb-2 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setIsChatSidebarOpen(true)}
+                className="min-w-0 flex items-center gap-2 text-left text-[#3D3D3D] hover:text-[#F4A261] transition-colors"
+              >
+                <MessageSquare size={15} className="shrink-0" />
+                <span className="truncate text-xs font-bold">{activeConversation?.title || '新的对话'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleNewConversation}
+                className="shrink-0 w-8 h-8 rounded-full bg-white border border-[#F0EBE1] text-[#F4A261] flex items-center justify-center shadow-sm hover:bg-[#FFF0E5] transition-colors"
+                aria-label="新建对话"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+
             <div className="flex-1 overflow-y-auto px-5 pb-28 pt-1 space-y-3 mask-fade-top">
-              {chatHistory.length === 0 ? (
+              {isLoadingChatMessages ? (
+                <div className="h-full flex items-center justify-center text-[#F4A261]">
+                  <Loader2 size={22} className="animate-spin" />
+                </div>
+              ) : chatHistory.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center max-w-[280px] mx-auto text-[#A0A0A0] text-sm">
                   <MessageCircle size={26} className="mb-3 opacity-50" />
-                  摸摸 DuoMi 的头，说点什么吧。
+                  {activeConversationId ? '这个对话还没有内容。' : '这是一个新对话，说点什么开始吧。'}
                 </div>
               ) : (
                 chatHistory.map((msg, idx) => (
@@ -705,6 +855,78 @@ export default function App() {
             <span className={`text-[10px] font-semibold transition-colors ${activeTab === 'calendar' ? 'text-[#F4A261]' : 'text-[#A0A0A0]'}`}>日历</span>
           </button>
         </nav>
+
+        {isChatSidebarOpen && (
+          <div className="absolute inset-0 z-50 flex justify-start overflow-hidden">
+            <div className="absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity" onClick={() => setIsChatSidebarOpen(false)} />
+            <div className="w-[86%] h-full bg-[#FDFBF7] relative flex flex-col shadow-2xl animate-in slide-in-from-left duration-300 border-r border-[#F0EBE1]">
+              <div className="flex items-center justify-between p-5 border-b border-[#F0EBE1] bg-white">
+                <h2 className="font-bold text-[#3D3D3D] flex items-center gap-2">
+                  <MessageSquare size={18} className="text-[#F4A261]" />
+                  对话
+                </h2>
+                <button onClick={() => setIsChatSidebarOpen(false)} className="p-1.5 bg-[#F4F5F7] rounded-full text-[#8C8C8C] hover:text-[#3D3D3D]">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="p-4 border-b border-[#F0EBE1] bg-white">
+                <button
+                  onClick={handleNewConversation}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-[#F4A261] hover:bg-[#E79251] text-white text-sm font-bold transition-colors"
+                >
+                  <Plus size={16} />
+                  新对话
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {chatConversations.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-[#A0A0A0] text-sm px-6">
+                    <MessageCircle size={26} className="mb-3 opacity-50" />
+                    还没有历史对话。开始发送第一句话后，这里会自动保存。
+                  </div>
+                ) : (
+                  chatConversations.map((conversation) => {
+                    const isActive = conversation.id === activeConversationId;
+                    const dateLabel = new Date(conversation.last_message_at || conversation.updated_at).toLocaleDateString([], {
+                      month: 'short',
+                      day: 'numeric',
+                    });
+
+                    return (
+                      <div
+                        key={conversation.id}
+                        className={`group flex items-center gap-2 rounded-2xl border p-2 transition-colors ${
+                          isActive
+                            ? 'border-[#F4A261] bg-[#FFF4EC]'
+                            : 'border-[#F0EBE1] bg-white hover:border-[#F4C08A]'
+                        }`}
+                      >
+                        <button
+                          onClick={() => handleSelectConversation(conversation.id)}
+                          className="min-w-0 flex-1 text-left px-2 py-1"
+                        >
+                          <span className="block truncate text-sm font-bold text-[#3D3D3D]">{conversation.title}</span>
+                          <span className="block text-[11px] text-[#A0A0A0] mt-1">
+                            {dateLabel} · {conversation.message_count || 0} 条消息
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteConversation(conversation.id)}
+                          className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[#A0A0A0] hover:text-[#D96B52] hover:bg-[#FFF0ED] transition-colors"
+                          aria-label="删除对话"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {isBrainOpen && (
           <div className="absolute inset-0 z-50 flex justify-end overflow-hidden">
