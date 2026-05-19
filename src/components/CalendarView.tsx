@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { DiaryEntry } from '../types';
 import { DuoMiFace } from './DuoMiFace';
 import { ChevronLeft, ChevronRight, PenLine, Pencil, Trash2 } from 'lucide-react';
+import { formatDiaryContext } from '../utils/diaryContext';
 
 interface CalendarViewProps {
   entries: DiaryEntry[];
@@ -136,7 +137,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ entries, onAddMemory
             {selectedEntries.map(entry => (
               <div key={entry.id} className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-[11px] font-medium text-[#A0A0A0]">{entry.date}</div>
+                  <div>
+                    <div className="text-[11px] font-medium text-[#A0A0A0]">{entry.date}</div>
+                    {formatDiaryContext(entry) && (
+                      <div className="mt-1 text-[11px] font-medium text-[#8C8C8C]">{formatDiaryContext(entry)}</div>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5">
                     {entry.mood && (
                       <div className="flex items-center gap-1 bg-[#FFF0E5] px-2 py-1 rounded-lg">

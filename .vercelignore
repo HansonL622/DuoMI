@@ -1,0 +1,7 @@
+node_modules
+dist
+.npm-cache
+.DS_Store
+evals/reports
+DuoMI_pics
+video

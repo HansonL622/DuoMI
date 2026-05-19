@@ -22,6 +22,7 @@ import {
 import { CalendarView } from './components/CalendarView';
 import { DuoMiStage } from './components/DuoMiStage';
 import { DuoMiFace } from './components/DuoMiFace';
+import { collectDiaryContext } from './services/weatherService';
 import {
   clearAllUserData,
   createChatConversation,
@@ -39,6 +40,7 @@ import {
 import { extractProfile, polishCustomTone, streamCompanionMessage } from './services/duomiApi';
 import { isSupabaseConfigured, supabase } from './services/supabaseClient';
 import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, ResponseTone, UserProfile } from './types';
+import { formatDiaryContext } from './utils/diaryContext';
 
 const moods: Mood[] = ['happy', 'angry', 'sad', 'naughty', 'surprised', 'sleepy', 'shy', 'proud', 'scared'];
 
@@ -515,21 +517,32 @@ export default function App() {
     setError(null);
 
     try {
-      const savedEntry = await createDiaryEntry(diaryDate, content, mood);
+      const diaryContext = await collectDiaryContext();
+      const savedEntry = await createDiaryEntry(diaryDate, content, mood, diaryContext.weather, diaryContext.place);
+      const saveNotes: string[] = [];
       setDiaryEntries((prev) => [savedEntry, ...prev].sort((a, b) => b.timestamp - a.timestamp));
       setDiaryInput('');
       setSelectedMood(null);
       setDiaryDate(new Date());
       setActiveTab('calendar');
+      if (diaryContext.warning) {
+        saveNotes.push(diaryContext.warning);
+      } else if ((diaryContext.weather || diaryContext.place) && !savedEntry.weather && !savedEntry.place) {
+        saveNotes.push('Supabase 还没有同步天气和地点字段，所以这次只保存了文字和心情。');
+      }
 
       try {
-        const nextProfile = await extractProfile(profile, content, mood ? moodLabelMap[mood] : undefined);
+        const nextProfile = await extractProfile(profile, content, mood ? moodLabelMap[mood] : undefined, savedEntry.weather, savedEntry.place);
         await persistProfile({
           ...nextProfile,
           rejected_memories: profile?.rejected_memories || nextProfile.rejected_memories || [],
         });
+        if (saveNotes.length > 0) {
+          setError(`日记已保存；${saveNotes.join('；')}`);
+        }
       } catch (profileError) {
-        setError(profileError instanceof Error ? `日记已保存，但画像更新失败：${profileError.message}` : '日记已保存，但画像更新失败');
+        const profileMessage = profileError instanceof Error ? profileError.message : '画像更新失败';
+        setError(`日记已保存；${[...saveNotes, `画像更新失败：${profileMessage}`].join('；')}`);
       }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : '日记保存失败');
@@ -555,7 +568,7 @@ export default function App() {
       setEditingEntry(null);
 
       try {
-        const nextProfile = await extractProfile(profile, updated.content, updated.mood ? moodLabelMap[updated.mood] : undefined);
+        const nextProfile = await extractProfile(profile, updated.content, updated.mood ? moodLabelMap[updated.mood] : undefined, updated.weather, updated.place);
         await persistProfile({
           ...nextProfile,
           rejected_memories: profile?.rejected_memories || nextProfile.rejected_memories || [],
@@ -1014,7 +1027,12 @@ export default function App() {
                     {diaryEntries.map((entry) => (
                       <div key={entry.id} className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
                         <div className="flex items-start justify-between gap-3 mb-2">
-                          <div className="text-[11px] font-medium text-[#A0A0A0]">{entry.date}</div>
+                          <div>
+                            <div className="text-[11px] font-medium text-[#A0A0A0]">{entry.date}</div>
+                            {formatDiaryContext(entry) && (
+                              <div className="mt-1 text-[11px] font-medium text-[#8C8C8C]">{formatDiaryContext(entry)}</div>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1">
                             <button onClick={() => openEditEntry(entry)} className="p-1.5 rounded-full text-[#A0A0A0] hover:text-[#F4A261] hover:bg-[#FFF0E5]"><Pencil size={13} /></button>
                             <button onClick={() => handleDeleteEntry(entry)} className="p-1.5 rounded-full text-[#A0A0A0] hover:text-[#D96B52] hover:bg-[#FFF0ED]"><Trash2 size={13} /></button>
@@ -1440,7 +1458,7 @@ export default function App() {
                   隐私与安全
                 </h3>
                 <p className="text-xs text-[#8C8C8C] leading-relaxed">
-                  你的日记、聊天和透明大脑会保存到 Supabase 云端，并通过账号隔离。AI 回应由服务端调用豆包生成，浏览器不会保存或暴露模型 API Key。
+                  你的日记、聊天、透明大脑，以及新日记的天气和城市级地点背景会保存到 Supabase 云端，并通过账号隔离。天气来自 Open-Meteo，地点来自 OpenStreetMap Nominatim（© OpenStreetMap contributors）；不会保存经纬度。AI 回应由服务端调用豆包生成，浏览器不会保存或暴露模型 API Key。
                 </p>
                 <div className="mt-4 rounded-2xl bg-[#FDFBF7] border border-[#F0EBE1] p-4">
                   <div className="flex items-start justify-between gap-3">

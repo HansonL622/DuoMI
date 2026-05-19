@@ -50,12 +50,34 @@ export interface ChatConversation {
   message_count?: number;
 }
 
+export interface WeatherSnapshot {
+  temperatureC: number;
+  conditionCode: number;
+  conditionLabel: string;
+  windSpeed: number;
+  precipitation: number;
+  timezone: string;
+  source: 'open-meteo';
+  capturedAt: string;
+}
+
+export interface PlaceSnapshot {
+  city: string;
+  region: string;
+  country: string;
+  label: string;
+  source: 'nominatim';
+  capturedAt: string;
+}
+
 export interface DiaryEntry {
   id: string;
   date: string;
   timestamp: number;
   content: string;
   mood?: Mood;
+  weather?: WeatherSnapshot;
+  place?: PlaceSnapshot;
   created_at?: string;
   updated_at?: string;
 }

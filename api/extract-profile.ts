@@ -1,6 +1,6 @@
 import { getAiProvider } from './_lib/aiProvider';
 import { requireUser } from './_lib/auth';
-import type { UserProfile } from '../src/types';
+import type { PlaceSnapshot, UserProfile, WeatherSnapshot } from '../src/types';
 
 type ApiRequest = {
   method?: string;
@@ -20,7 +20,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     await requireUser(req);
-    const { currentProfile, diaryContent, moodLabel } = req.body || {};
+    const { currentProfile, diaryContent, moodLabel, weather, place } = req.body || {};
     if (typeof diaryContent !== 'string' || !diaryContent.trim()) {
       res.status(400).json({ error: '日记内容不能为空' });
       return;
@@ -30,6 +30,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       (currentProfile || null) as UserProfile | null,
       diaryContent,
       typeof moodLabel === 'string' ? moodLabel : undefined,
+      (weather || undefined) as WeatherSnapshot | undefined,
+      (place || undefined) as PlaceSnapshot | undefined,
     );
     res.status(200).json({ profile });
   } catch (error) {

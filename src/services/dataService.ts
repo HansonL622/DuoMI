@@ -1,4 +1,4 @@
-import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, UserProfile, UserSettings } from '../types';
+import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, PlaceSnapshot, UserProfile, UserSettings, WeatherSnapshot } from '../types';
 import { supabase } from './supabaseClient';
 
 type DiaryRow = {
@@ -6,6 +6,8 @@ type DiaryRow = {
   entry_date: string;
   content: string;
   mood: Mood | null;
+  weather?: WeatherSnapshot | null;
+  place?: PlaceSnapshot | null;
   created_at: string;
   updated_at: string;
 };
@@ -115,6 +117,8 @@ function toDiaryEntry(row: DiaryRow): DiaryEntry {
     timestamp,
     content: row.content,
     mood: row.mood || undefined,
+    weather: row.weather || undefined,
+    place: row.place || undefined,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -161,20 +165,59 @@ export async function listDiaryEntries(): Promise<DiaryEntry[]> {
   return ((data || []) as DiaryRow[]).map(toDiaryEntry);
 }
 
-export async function createDiaryEntry(entryDate: Date, content: string, mood: Mood | null): Promise<DiaryEntry> {
+export async function createDiaryEntry(
+  entryDate: Date,
+  content: string,
+  mood: Mood | null,
+  weather?: WeatherSnapshot,
+  place?: PlaceSnapshot,
+): Promise<DiaryEntry> {
   const client = requireSupabase();
-  const { data, error } = await client
+
+  const baseEntry = {
+    entry_date: toLocalDateString(entryDate),
+    content,
+    mood,
+  };
+  const entryWithContext = {
+    ...baseEntry,
+    weather: weather || null,
+    place: place || null,
+  };
+
+  let { data, error } = await client
     .from('diary_entries')
-    .insert({
-      entry_date: toLocalDateString(entryDate),
-      content,
-      mood,
-    })
+    .insert(entryWithContext)
     .select('*')
     .single();
 
+  if (error && isMissingDiaryContextColumnError(error)) {
+    const retry = await client
+      .from('diary_entries')
+      .insert(baseEntry)
+      .select('*')
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
+
   if (error) throw error;
   return toDiaryEntry(data as DiaryRow);
+}
+
+function isMissingDiaryContextColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const details = [
+    'message' in error ? String(error.message) : '',
+    'details' in error ? String(error.details) : '',
+    'hint' in error ? String(error.hint) : '',
+    'code' in error ? String(error.code) : '',
+  ].join(' ');
+
+  return (
+    details.includes('PGRST204')
+    || /weather|place/i.test(details) && /column|schema cache|could not find/i.test(details)
+  );
 }
 
 export async function updateDiaryEntry(id: string, content: string, mood: Mood | null): Promise<DiaryEntry> {

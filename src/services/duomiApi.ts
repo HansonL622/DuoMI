@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRuntimeContext, DiaryEntry, UserProfile } from '../types';
+import type { ChatMessage, ChatRuntimeContext, DiaryEntry, PlaceSnapshot, UserProfile, WeatherSnapshot } from '../types';
 import { supabase } from './supabaseClient';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -91,11 +91,15 @@ export async function extractProfile(
   currentProfile: UserProfile | null,
   diaryContent: string,
   moodLabel?: string,
+  weather?: WeatherSnapshot,
+  place?: PlaceSnapshot,
 ): Promise<UserProfile> {
   const response = await postJson<{ profile: UserProfile }>('/api/extract-profile', {
     currentProfile,
     diaryContent,
     moodLabel,
+    weather,
+    place,
   });
 
   return response.profile;

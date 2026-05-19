@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRuntimeContext, DiaryEntry, MemoryEvent, MemorySeverity, ResponseTone, UserProfile, UserSettings } from '../../src/types';
+import type { ChatMessage, ChatRuntimeContext, DiaryEntry, MemoryEvent, MemorySeverity, PlaceSnapshot, ResponseTone, UserProfile, UserSettings, WeatherSnapshot } from '../../src/types';
 import { getEnv } from './env';
 import { buildSupportPlaybookPrompt } from './supportPlaybook';
 
@@ -13,7 +13,7 @@ const HISTORY_CONTENT_LIMIT = 500;
 const DIARY_CONTENT_LIMIT = 320;
 
 export interface AiProvider {
-  extractProfile(currentProfile: UserProfile | null, diaryContent: string, moodLabel?: string): Promise<UserProfile>;
+  extractProfile(currentProfile: UserProfile | null, diaryContent: string, moodLabel?: string, weather?: WeatherSnapshot, place?: PlaceSnapshot): Promise<UserProfile>;
   polishToneInstruction(userRequest: string): Promise<string>;
   sendCompanionMessage(
     profile: UserProfile | null,
@@ -101,7 +101,7 @@ function normalizeMemoryEvents(input: unknown, fallback: UserProfile | null): Me
   const existing = new Map((fallback?.memory_events || []).map((event) => [event.content, event]));
   if (!Array.isArray(input)) return fallback?.memory_events || [];
 
-  return input
+  const nextEvents = input
     .filter((item): item is Partial<MemoryEvent> => typeof item === 'object' && item !== null)
     .map((item, index) => {
       const content = typeof item.content === 'string' ? item.content.trim() : '';
@@ -115,7 +115,15 @@ function normalizeMemoryEvents(input: unknown, fallback: UserProfile | null): Me
         updated_at: new Date().toISOString(),
       };
     })
-    .filter((item) => item.content)
+    .filter((item) => item.content);
+
+  const nextContent = new Set(nextEvents.map((event) => event.content));
+  const preservedEvents = (fallback?.memory_events || [])
+    .filter((event) => event.content && !nextContent.has(event.content))
+    .filter((event) => event.severity >= 3);
+
+  return [...nextEvents, ...preservedEvents]
+    .sort((a, b) => b.severity - a.severity)
     .slice(0, 8);
 }
 
@@ -146,6 +154,15 @@ function compactText(value: string, maxLength: number): string {
   return compacted.length > maxLength ? `${compacted.slice(0, maxLength)}...` : compacted;
 }
 
+function summarizeWeather(weather: WeatherSnapshot | undefined): string {
+  if (!weather) return '';
+  return `${weather.conditionLabel}，${Math.round(weather.temperatureC)}°C，降水 ${weather.precipitation}mm，风速 ${weather.windSpeed}km/h`;
+}
+
+function summarizePlace(place: PlaceSnapshot | undefined): string {
+  return place?.label || '';
+}
+
 function shouldUseFullSafetyPlaybook(message: string): boolean {
   return isDiagnosisRequest(message) || isCrisisRisk(message) || /(自杀|自残|想死|不想活|心理疾病|抑郁症|焦虑症|双相|ptsd|adhd|诊断|医生|用药)/i.test(message);
 }
@@ -156,6 +173,7 @@ function buildCompactSupportPrompt(): string {
     '先回应用户当下感受，再给一个很小的下一步；不要说教、鸡汤或要求用户立刻振作。',
     '只有旧记忆和本轮表达高度相关、且不是轻量吐槽时，才最多引用 1 个记忆。',
     '轻量烦躁、没心情、普通抱怨时，不要主动翻旧账，不要把过去事件说成当前原因。',
+    '天气和地点只能作为背景事实，不能作为心理状态、情绪变化、人格倾向、疾病或风险的原因。',
     '危机或诊断请求时，不引用无关旧记忆，优先安全边界和现实支持。',
   ].join('\n');
 }
@@ -287,9 +305,13 @@ ${buildToneInstruction(settings)}
 输出规则：
 - 用中文回应，通常 45 到 70 字；除非用户明确要求详细分析，否则不要长篇输出。
 - 少说教，不盲目正能量，不使用“你要加油”“振作起来”这类空泛表达。
-- 如果用户情绪不好，优先结合画像和相关日记做具体、克制的归因共情。
+- 如果用户情绪不好，优先结合画像和相关日记做具体、克制的背景承接与共情。
 - 严格遵守当前日期。日记上下文里的 relativeDay/dateKey 才是事件日期；不要把过去日记说成“今天”或“刚才”。
 - 普通寒暄、问候、轻量闲聊时，只回应当下这句话，不主动提起旧日记或旧压力源。
+- 天气和地点只能作为日记发生背景或用户明确提到经历时的辅助事实。
+- 严禁把天气或地点作为用户心理状态、情绪变化、人格倾向、心理疾病或风险等级的原因。
+- 不要说“因为下雨所以低落”“去某地让你变好”“天气导致焦虑”等确定因果。
+- 只有当日记正文明确表达地点相关体验时，才可提到“用户在某地写到某种体验”；不得概括成“某地让用户怎样”。
 - 避免高频使用“呀”“哦”“好不好”“软软的”“乖”等显得低幼的表达。
 - 遇到诊断请求或危机风险时，优先执行边界/安全规则，不引用无关画像或日记记忆。
 - 不夸大记忆，不确定时用“我好像记得”“听起来像是”。
@@ -343,6 +365,8 @@ ${buildToneInstruction(settings)}
         dateKey: dateKeyFromTimestamp(entry.timestamp),
         relativeDay: relativeDayLabel(dateKeyFromTimestamp(entry.timestamp), currentDate),
         mood: entry.mood,
+        weather: summarizeWeather(entry.weather),
+        place: summarizePlace(entry.place),
         content: compactText(entry.content, DIARY_CONTENT_LIMIT),
       })) : [],
     },
@@ -398,6 +422,11 @@ class DoubaoArkProvider implements AiProvider {
       }
 
       return content.trim();
+    } catch (error) {
+      if (error instanceof Error && error.message !== '豆包没有返回有效内容' && !error.message.includes('豆包服务')) {
+        throw new Error('豆包服务连接失败，请稍后再试');
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
@@ -489,7 +518,13 @@ class DoubaoArkProvider implements AiProvider {
     }
   }
 
-  async extractProfile(currentProfile: UserProfile | null, diaryContent: string, moodLabel?: string): Promise<UserProfile> {
+  async extractProfile(
+    currentProfile: UserProfile | null,
+    diaryContent: string,
+    moodLabel?: string,
+    weather?: WeatherSnapshot,
+    place?: PlaceSnapshot,
+  ): Promise<UserProfile> {
     const system = [
       '你是 DuoMi 的长期记忆整理器，只输出 JSON，不要输出 Markdown。',
       '根据新日记更新用户心理画像，保留仍然重要的旧信息，去掉重复、过期或过度推断的内容。',
@@ -497,6 +532,10 @@ class DoubaoArkProvider implements AiProvider {
       'JSON 字段必须是 key_facts、recent_mood、current_stressors、deep_fears、memory_events。',
       'memory_events 是统一的重要记忆列表，每项包含 id、content、severity、source；severity 为 1 到 5，1=轻微短期烦恼，5=高严重长期影响。',
       '只有持续、反复、影响睡眠/学习/工作/关系或用户明显痛苦的内容才进入 memory_events；普通吐槽、一天内的小烦躁不要长期记住。',
+      '天气和地点只能作为日记发生背景，不得作为用户心理状态、情绪变化、人格倾向、心理疾病或风险等级的归因。',
+      '禁止输出或保存“因为下雨所以低落”“去某地让用户变好”“天气导致焦虑”等确定因果。',
+      '只有当日记正文明确表达地点相关体验时，才允许记录地点经历；表述必须保留事实来源，例如“用户在杭州旅行时写到放松和开心”，不能改写成“杭州让用户开心”。',
+      '如果长期记忆涉及地点，必须避免因果化、诊断化和过度概括。',
       '所有数组最多保留 5 条，每条用简洁中文描述；memory_events 最多 6 条。',
       '不要解释推理过程，不要输出多余文本。',
     ].join('\n');
@@ -505,6 +544,8 @@ class DoubaoArkProvider implements AiProvider {
       {
         currentProfile: currentProfile || defaultProfile(),
         moodLabel: moodLabel || '',
+        weather: summarizeWeather(weather),
+        place: summarizePlace(place),
         diaryContent,
       },
       null,

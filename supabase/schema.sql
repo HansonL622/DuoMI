@@ -14,9 +14,15 @@ create table if not exists public.diary_entries (
   entry_date date not null,
   content text not null,
   mood text check (mood in ('happy','angry','sad','naughty','surprised','sleepy','shy','proud','scared')),
+  weather jsonb,
+  place jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.diary_entries
+  add column if not exists weather jsonb,
+  add column if not exists place jsonb;
 
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
