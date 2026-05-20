@@ -191,6 +191,7 @@ end;
 $$;
 
 revoke all on function public.check_api_usage_daily(text, integer) from public;
+revoke all on function public.check_api_usage_daily(text, integer) from anon;
 grant execute on function public.check_api_usage_daily(text, integer) to authenticated;
 
 create index if not exists diary_entries_user_date_idx on public.diary_entries(user_id, entry_date desc);
