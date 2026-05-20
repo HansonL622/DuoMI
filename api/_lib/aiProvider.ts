@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatRuntimeContext, DiaryEntry, MemoryEvent, MemorySeverity, PlaceSnapshot, ResponseTone, UserProfile, UserSettings, WeatherSnapshot } from '../../src/types';
-import { getEnv } from './env';
-import { buildSupportPlaybookPrompt } from './supportPlaybook';
+import { getEnv } from './env.js';
+import { buildSupportPlaybookPrompt } from './supportPlaybook.js';
 
 type ArkMessage = {
   role: 'system' | 'user' | 'assistant';

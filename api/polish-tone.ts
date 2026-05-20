@@ -1,6 +1,6 @@
-import { getAiProvider } from './_lib/aiProvider';
-import { requireUser } from './_lib/auth';
-import { checkRateLimit, RateLimitError } from './_lib/rateLimit';
+import { getAiProvider } from './_lib/aiProvider.js';
+import { requireUser } from './_lib/auth.js';
+import { checkRateLimit, RateLimitError } from './_lib/rateLimit.js';
 
 type ApiRequest = {
   method?: string;

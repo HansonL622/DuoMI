@@ -1,6 +1,6 @@
-import { requireUser } from './_lib/auth';
-import { checkRateLimit, RateLimitError } from './_lib/rateLimit';
-import { getEnv } from './_lib/env';
+import { requireUser } from './_lib/auth.js';
+import { checkRateLimit, RateLimitError } from './_lib/rateLimit.js';
+import { getEnv } from './_lib/env.js';
 import type { PlaceSnapshot, WeatherSnapshot } from '../src/types';
 
 type ApiRequest = {

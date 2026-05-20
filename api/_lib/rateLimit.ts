@@ -1,4 +1,4 @@
-import { getEnv } from './env';
+import { getEnv } from './env.js';
 
 const DAILY_LIMITS: Record<string, number> = {
   chat: 30,

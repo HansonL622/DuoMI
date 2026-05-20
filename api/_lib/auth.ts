@@ -1,4 +1,4 @@
-import { getEnv } from './env';
+import { getEnv } from './env.js';
 
 export async function requireUser(req: { headers?: Record<string, string | string[] | undefined> }) {
   const authHeader = req.headers?.authorization;
