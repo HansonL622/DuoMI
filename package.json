@@ -1,6 +1,7 @@
 {
-  "name": "duomi",
-  "private": true,
+  "name": "duomi-psychological-companion-diary-ai",
+  "description": "DuoMI心理陪护日记AI：私密心理陪伴、日记、聊天和透明记忆的开源本地运行版。",
+  "license": "MIT",
   "version": "0.0.0",
   "type": "module",
   "scripts": {

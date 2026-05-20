@@ -1,5 +1,5 @@
 {
-  "name": "DuoMi",
-  "description": "A private AI companion with diary, mood calendar, and transparent memory.",
+  "name": "DuoMI心理陪护日记AI",
+  "description": "开源的私密心理陪伴、日记、聊天和透明记忆应用。",
   "requestFramePermissions": []
 }
