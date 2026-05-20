@@ -1,78 +1,100 @@
-# DuoMi
+# DuoMi 本地运行版
 
-DuoMi 是一个私密心理陪伴与日记 App，使用 Vercel、Supabase 和火山方舟豆包 API。它把日记、聊天、长期记忆和透明大脑放在同一个移动端体验里，重点是陪伴、记忆可控和隐私边界。
+DuoMi 是一个私密心理陪伴与日记 App。这个仓库当前版本已经合并所有本地功能分支，并作为本地运行版终稿维护。
 
-## 当前功能
+应用由 Vite + React 前端、Vercel 本地 API 路由、Supabase 数据库和火山方舟豆包模型组成。前端负责日记、聊天、透明大脑和设置界面；API 路由负责模型调用、画像整理、语气整理、天气地点背景获取与登录校验。
 
-- 日记记录：记录每日心情、文字内容，并用 AI 更新用户画像。
-- 流式聊天：`/api/chat` 使用文本流返回，前端会边生成边显示 DuoMi 的回复。
-- 对话管理：支持多会话、历史消息加载、删除会话和新建会话。
-- 自定义语气：支持成熟克制、温柔陪伴、直接清晰、分析反思、绒绒陪伴和专属定制。
-- 透明大脑：展示 DuoMi 记住的当下情绪和重要记忆，用户可以删除、标记不准确、调整严重程度。
-- 记忆评级：重要记忆按 1 到 5 级管理，等级会影响 DuoMi 提及该事件的频率和强度。
-- 烦恼遗忘曲线：低严重度记忆会更快淡出模型上下文，普通烦躁和短期吐槽不会轻易被旧事件绑定。
-- 隐私锁：透明大脑可选密码保护；关闭密码需要当前密码；忘记密码可通过预设验证问题重置。
-- 日记背景上下文：写日记时自动获取当天天气（Open-Meteo）和城市级地点（OpenStreetMap Nominatim），不保存经纬度。
-- 安全边界：心理支持提示词覆盖诊断边界、危机场景、低风险自助练习和记忆使用规则；天气和地点只作为背景事实，不用于心理状态的因果归因。
+## 功能概览
+
+- 邮箱账号登录：使用 Supabase Auth 登录和注册。
+- 日记记录：按日期保存内容和心情，支持编辑与删除。
+- 日记背景：写日记时可获取天气和城市级地点，只保存天气快照和城市信息，不保存经纬度。
+- AI 画像整理：日记保存后调用 `/api/extract-profile` 更新用户画像。
+- 流式聊天：`/api/chat` 以文本流返回回复，前端边生成边显示。
+- 多会话聊天：支持创建、加载、删除会话，聊天消息保存到 Supabase。
+- 自定义语气：内置成熟克制、温柔陪伴、直接清晰、分析反思、绒绒陪伴，也支持专属定制语气。
+- 透明大脑：展示近期情绪、重要记忆和记忆严重度，用户可以删除或标记不准确。
+- 记忆控制：重要记忆按 1 到 5 级管理，低严重度记忆更快淡出上下文。
+- 隐私锁：透明大脑可选密码保护，支持预设验证问题重置。
+- 数据清理：应用内支持清空当前账号的日记、聊天和画像数据。
+
+## 技术栈
+
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS 4
+- Supabase Auth / Database / RLS
+- Vercel API Routes，本地通过 `vercel dev` 运行
+- 火山方舟豆包 API
+- Open-Meteo 天气接口
+- OpenStreetMap Nominatim 逆地理编码
 
 ## 本地运行
 
-1. 安装依赖：
+### 1. 安装依赖
 
-   ```bash
-   npm install
-   ```
+```bash
+npm install
+```
 
-2. 复制环境变量：
+### 2. 创建本地环境变量
 
-   ```bash
-   cp .env.example .env.local
-   ```
+```bash
+cp .env.example .env.local
+```
 
-3. 填写 `.env.local`：
+填写 `.env.local`：
 
-   ```bash
-   VITE_SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
-   VITE_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
-   ARK_API_KEY="YOUR_ARK_API_KEY"
-   ARK_MODEL_ID="YOUR_ARK_ENDPOINT_OR_MODEL_ID"
-   ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
-   ```
+```bash
+VITE_SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+VITE_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
 
-4. 在 Supabase SQL Editor 中执行 [supabase/schema.sql](supabase/schema.sql)。
+ARK_API_KEY="YOUR_ARK_API_KEY"
+ARK_MODEL_ID="YOUR_ARK_ENDPOINT_OR_MODEL_ID"
+ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+```
 
-5. 启动开发环境：
+说明：
 
-   ```bash
-   npm run dev:vercel
-   ```
+- `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` 会进入浏览器，用于 Supabase 登录和 RLS 数据访问。
+- `ARK_API_KEY`、`ARK_MODEL_ID`、`ARK_BASE_URL` 只由本地 API 路由读取，不应写入前端代码。
+- 本地 API 会从 `.env.local` 读取服务端变量，所以不需要单独配置 Vercel 项目环境变量。
 
-   这个命令会同时启动前端和 Vercel API 路由。只运行 `npm run dev` 时，前端可以打开，但 `/api/chat`、`/api/extract-profile`、`/api/polish-tone` 不会由 Vercel 本地路由提供。
+### 3. 初始化 Supabase
 
-## 上线到 Vercel
+在 Supabase SQL Editor 中执行：
 
-在 Vercel 项目环境变量中配置：
+```sql
+-- 复制并运行 supabase/schema.sql 的完整内容
+```
 
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-- `ARK_API_KEY`
-- `ARK_MODEL_ID`
-- `ARK_BASE_URL`
-
-`ARK_API_KEY` 和 `ARK_MODEL_ID` 只在服务端 API 路由读取，不会暴露到浏览器。AI 路由会校验 Supabase 登录 token，避免未登录请求消耗模型额度。
-
-## Supabase
-
-执行 `supabase/schema.sql` 会创建或更新：
+该脚本会创建或更新：
 
 - `profiles`
-- `diary_entries`（含 `weather` 和 `place` JSONB 字段，存储天气快照和城市级地点）
+- `diary_entries`
 - `chat_conversations`
 - `chat_messages`
 
 所有表都启用了 Row Level Security，用户只能访问自己的数据。
 
-`profiles.profile` 是 JSON 画像，当前包含：
+### 4. 启动本地应用
+
+```bash
+npm run dev:vercel
+```
+
+默认会启动本地前端和 API 路由。打开终端输出里的本地地址，一般是：
+
+```text
+http://localhost:3000
+```
+
+不要只用 `npm run dev` 作为完整体验入口。它只启动 Vite 前端，不会提供 `/api/chat`、`/api/extract-profile`、`/api/polish-tone`、`/api/diary-context` 这些本地 API。
+
+## Supabase 数据结构
+
+`profiles.profile` 是 JSONB 用户画像，当前主要字段为：
 
 - `recent_mood`
 - `key_facts`
@@ -82,19 +104,35 @@ DuoMi 是一个私密心理陪伴与日记 App，使用 Vercel、Supabase 和火
 - `rejected_memories`
 - `settings`
 
-旧字段会继续兼容；透明大脑主视图优先使用新的 `memory_events`。
+`diary_entries` 保存日记内容、心情、天气快照和城市级地点：
+
+- `weather`：Open-Meteo 返回的天气摘要。
+- `place`：Nominatim 返回的城市、地区、国家和展示标签。
+
+`chat_conversations` 保存会话标题、更新时间、最后消息时间和消息数量。
+
+`chat_messages` 保存每条用户或模型消息，并通过 `conversation_id` 归属到会话。
+
+## API 路由
+
+- `api/chat.ts`：聊天回复，返回 `text/plain` 流。
+- `api/extract-profile.ts`：根据日记、心情、天气和地点更新用户画像。
+- `api/diary-context.ts`：接收浏览器定位坐标，返回天气和城市级地点；不会把经纬度写入数据库。
+- `api/polish-tone.ts`：把用户描述整理成可执行的回复语气提示词。
+- `api/_lib/auth.ts`：校验 Supabase 登录 token。
+- `api/_lib/env.ts`：读取本地 `.env.local` 和运行时环境变量。
+- `api/_lib/aiProvider.ts`：豆包请求、流式解析、画像归一化和记忆召回。
+- `api/_lib/supportPlaybook.ts`：心理陪伴安全知识库。
 
 ## 记忆策略
 
-DuoMi 不应该为了显得“记得你”而频繁翻旧账。当前策略是：
+DuoMi 的记忆系统用于提供连续陪伴，不用于频繁翻旧账。
 
 - 普通问候、轻量烦躁、短期没心情时，不主动召回旧记忆。
 - 只有本轮表达和旧记忆高度相关时，才最多引用一个最相关记忆。
 - 诊断请求或危机风险场景，不引用无关旧记忆。
+- 用户删除或标记不准确的记忆后，该内容会从画像中移除并加入拒绝记忆列表。
 - 记忆严重度越低，越快从模型上下文中淡出。
-- 用户在透明大脑里删除或标记“不准确”的记忆，会从画像中移除并加入拒绝记忆列表。
-
-严重度含义：
 
 | 等级 | 含义 | 提及策略 |
 | --- | --- | --- |
@@ -104,44 +142,47 @@ DuoMi 不应该为了显得“记得你”而频繁翻旧账。当前策略是�
 | 4 | 严重 | 谨慎保留，避免反复刺激 |
 | 5 | 高严重 | 长期保留，优先安全和稳定 |
 
-## 透明大脑密码
+## 安全与隐私边界
 
-透明大脑密码是应用内的可选保护层，用来降低误点打开私密记忆的风险。
+- DuoMi 是心理陪伴工具，不提供医学诊断、治疗方案或危机替代服务。
+- 危机场景会优先鼓励用户联系现实支持、当地紧急服务或专业热线。
+- 天气和地点只作为日记背景事实，不用于推断心理状态因果。
+- 透明大脑密码只是应用内的额外访问保护，不是端到端加密。
+- 数据隔离依赖 Supabase Auth 和 RLS；请保管好 Supabase 项目和方舟 API Key。
 
-- 开启密码时，用户需要选择一个预设验证问题并填写答案。
-- 密码和验证答案都只保存哈希。
-- 关闭密码必须输入当前密码。
-- 忘记密码时，可以通过验证问题重置新密码。
-
-注意：这不是端到端加密方案；数据仍由 Supabase 账号隔离和 RLS 保护。
-
-## AI 路由
-
-- `api/chat.ts`：聊天回复，返回 `text/plain` 流。
-- `api/extract-profile.ts`：根据日记更新画像，接收天气/地点作为辅助上下文。
-- `api/diary-context.ts`：根据浏览器 IP 获取天气（Open-Meteo）和城市级地点（Nominatim），用于日记背景。
-- `api/polish-tone.ts`：把用户自定义语气整理成可执行提示词。
-- `api/_lib/aiProvider.ts`：豆包调用、流式解析、记忆召回、画像归一化。
-- `api/_lib/supportPlaybook.ts`：心理陪伴安全知识库。
-
-## 脚本
+## 常用命令
 
 ```bash
+npm run dev:vercel   # 完整本地运行，包含前端和 API 路由
 npm run dev          # 只启动 Vite 前端
-npm run dev:vercel   # 启动 Vercel 本地开发环境，包含 API 路由
 npm run lint         # TypeScript 类型检查
 npm run build        # 生产构建
-npm run eval:chat    # 跑聊天评测用例
+npm run eval:chat    # 运行聊天人工评测用例
 ```
 
-## AI 安全与评测
+评测用例在 `evals/duomi-chat-cases.json`，报告写入 `evals/reports/`。评测目前用于人工审阅，不做自动合格判定。
 
-聊天提示词使用 [api/_lib/supportPlaybook.ts](api/_lib/supportPlaybook.ts) 中的心理支持知识库，覆盖陪伴边界、常见情绪场景、低风险自助练习、危机回应和禁用回应。
+## 本地验收清单
 
-基础人工评测用例在 [evals/duomi-chat-cases.json](evals/duomi-chat-cases.json)。每次明显调整提示词、模型参数、记忆召回或危机规则后，应运行：
+1. `npm run lint` 通过。
+2. `npm run build` 通过。
+3. `npm run dev:vercel` 可以打开本地页面。
+4. 新账号可以注册或登录。
+5. 新建日记后可以保存，透明大脑能更新画像。
+6. 聊天可以流式返回，刷新后仍能看到历史会话。
+7. 透明大脑的删除、标记不准确、严重度调整和隐私锁可正常使用。
+8. 若浏览器允许定位，日记能展示天气和城市级地点；若拒绝定位，日记仍可正常保存。
 
-```bash
-npm run eval:chat
+## 目录说明
+
+```text
+api/                 Vercel 本地 API 路由
+api/_lib/            服务端通用逻辑
+src/                 React 前端
+src/components/      主要 UI 组件
+src/services/        Supabase、API、天气地点服务
+src/utils/           前端工具函数
+supabase/schema.sql  数据库初始化和迁移脚本
+evals/               聊天评测用例与报告
+public/              应用图片和视频素材
 ```
-
-评测报告会写入 `evals/reports/`。该评测目前用于人工审阅，不做自动合格判定。
