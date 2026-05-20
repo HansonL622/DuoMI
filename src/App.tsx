@@ -227,7 +227,12 @@ function AuthScreen() {
 
     const { data, error: authError } = authMode === 'login'
       ? await supabase.auth.signInWithPassword(credentials)
-      : await supabase.auth.signUp(credentials);
+      : await supabase.auth.signUp({
+        ...credentials,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
 
     setIsSending(false);
     if (authError) {
