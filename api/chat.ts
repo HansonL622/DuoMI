@@ -1,5 +1,6 @@
 import { getAiProvider } from './_lib/aiProvider';
 import { requireUser } from './_lib/auth';
+import { checkRateLimit, RateLimitError } from './_lib/rateLimit';
 import type { ChatMessage, ChatRuntimeContext, DiaryEntry, UserProfile } from '../src/types';
 
 type ApiRequest = {
@@ -29,6 +30,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       res.status(400).json({ error: '消息不能为空' });
       return;
     }
+    await checkRateLimit('chat', req);
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -45,6 +47,10 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
     res.end();
   } catch (error) {
+    if (error instanceof RateLimitError) {
+      res.status(429).json({ error: error.message });
+      return;
+    }
     if (res.headersSent) {
       res.end();
       return;

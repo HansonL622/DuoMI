@@ -1,5 +1,6 @@
 import { getAiProvider } from './_lib/aiProvider';
 import { requireUser } from './_lib/auth';
+import { checkRateLimit, RateLimitError } from './_lib/rateLimit';
 import type { PlaceSnapshot, UserProfile, WeatherSnapshot } from '../src/types';
 
 type ApiRequest = {
@@ -25,6 +26,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       res.status(400).json({ error: '日记内容不能为空' });
       return;
     }
+    await checkRateLimit('extract-profile', req);
 
     const profile = await getAiProvider().extractProfile(
       (currentProfile || null) as UserProfile | null,
@@ -35,6 +37,10 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     );
     res.status(200).json({ profile });
   } catch (error) {
+    if (error instanceof RateLimitError) {
+      res.status(429).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : '画像更新失败' });
   }
 }

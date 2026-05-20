@@ -147,6 +147,52 @@ create policy "Users can manage own chat messages"
     )
   );
 
+create table if not exists public.api_usage_daily (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null default current_date,
+  route text not null,
+  count integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(user_id, date, route)
+);
+
+alter table public.api_usage_daily enable row level security;
+
+drop policy if exists "Users can read own API usage" on public.api_usage_daily;
+create policy "Users can read own API usage"
+  on public.api_usage_daily for select
+  using (auth.uid() = user_id);
+
+create or replace function public.check_api_usage_daily(p_route text, p_limit integer)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_date date := current_date;
+  v_count integer;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  insert into public.api_usage_daily (user_id, date, route, count)
+  values (v_user_id, v_date, p_route, 1)
+  on conflict (user_id, date, route)
+  do update set count = api_usage_daily.count + 1
+  returning count into v_count;
+
+  return v_count <= p_limit;
+end;
+$$;
+
+revoke all on function public.check_api_usage_daily(text, integer) from public;
+grant execute on function public.check_api_usage_daily(text, integer) to authenticated;
+
 create index if not exists diary_entries_user_date_idx on public.diary_entries(user_id, entry_date desc);
 create index if not exists chat_conversations_user_recent_idx on public.chat_conversations(user_id, last_message_at desc, updated_at desc);
 create index if not exists chat_messages_user_created_idx on public.chat_messages(user_id, created_at asc);

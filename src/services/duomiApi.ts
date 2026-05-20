@@ -37,6 +37,9 @@ async function postJson<TResponse>(url: string, body: unknown): Promise<TRespons
     if (!payload && response.status === 404) {
       throw new Error('DuoMi 的本地 API 没有启动。请使用 npm run dev:vercel，而不是 npm run dev');
     }
+    if (response.status === 429 && payload?.error) {
+      throw new Error(payload.error);
+    }
     throw new Error(payload?.error || 'DuoMi 暂时没有连上，请稍后再试');
   }
 
@@ -59,6 +62,9 @@ async function postTextStream(url: string, body: unknown, onDelta: (delta: strin
     const payload = await response.json().catch(() => null);
     if (!payload && response.status === 404) {
       throw new Error('DuoMi 的本地 API 没有启动。请使用 npm run dev:vercel，而不是 npm run dev');
+    }
+    if (response.status === 429 && payload?.error) {
+      throw new Error(payload.error);
     }
     throw new Error(payload?.error || 'DuoMi 暂时没有连上，请稍后再试');
   }

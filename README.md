@@ -2,6 +2,8 @@
 
 DuoMI心理陪护日记AI 是一个开源的私密心理陪伴与日记 App。这个仓库当前版本已经合并所有本地功能分支，并作为本地运行版终稿维护。
 
+> **在线体验**：待上线后补充。
+
 应用由 Vite + React 前端、Vercel 本地 API 路由、Supabase 数据库和火山方舟豆包模型组成。前端负责日记、聊天、透明大脑和设置界面；API 路由负责模型调用、画像整理、语气整理、天气地点背景获取与登录校验。
 
 ## 开源说明
@@ -59,12 +61,15 @@ VITE_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
 ARK_API_KEY="YOUR_ARK_API_KEY"
 ARK_MODEL_ID="YOUR_ARK_ENDPOINT_OR_MODEL_ID"
 ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+
+SITE_URL="https://your-app.vercel.app"
 ```
 
 说明：
 
 - `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` 会进入浏览器，用于 Supabase 登录和 RLS 数据访问。
 - `ARK_API_KEY`、`ARK_MODEL_ID`、`ARK_BASE_URL` 只由本地 API 路由读取，不应写入前端代码。
+- `SITE_URL` 用于 Nominatim User-Agent/Referer 等对外请求标识，部署到 Vercel 时设为你的生产域名。
 - 本地 API 会从 `.env.local` 读取服务端变量，所以不需要单独配置 Vercel 项目环境变量。
 
 ### 3. 初始化 Supabase
@@ -81,6 +86,7 @@ ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
 - `diary_entries`
 - `chat_conversations`
 - `chat_messages`
+- `api_usage_daily`
 
 所有表都启用了 Row Level Security，用户只能访问自己的数据。
 
@@ -97,6 +103,50 @@ http://localhost:3000
 ```
 
 不要只用 `npm run dev` 作为完整体验入口。它只启动 Vite 前端，不会提供 `/api/chat`、`/api/extract-profile`、`/api/polish-tone`、`/api/diary-context` 这些本地 API。
+
+## Vercel + Supabase 生产部署
+
+### 1. 准备 Supabase 项目
+
+在 [supabase.com](https://supabase.com) 创建项目，进入 SQL Editor 执行 `supabase/schema.sql` 的全部内容。打开 Settings > API，复制 Project URL 和 `anon` public key。
+
+### 2. 部署到 Vercel
+
+将仓库推送到 GitHub，在 [vercel.com](https://vercel.com) 导入项目。
+
+Vercel 会自动识别 Vite + React 项目。在项目 Settings > Environment Variables 中配置以下服务端环境变量：
+
+| 变量名 | 说明 |
+|--------|------|
+| `VITE_SUPABASE_URL` | Supabase Project URL |
+| `VITE_SUPABASE_ANON_KEY` | Supabase anon public key |
+| `ARK_API_KEY` | 火山方舟 API Key |
+| `ARK_MODEL_ID` | 火山方舟模型接入点 ID |
+| `ARK_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` |
+| `SITE_URL` | 你的 Vercel 生产域名（如 `https://duomi.vercel.app`） |
+
+`VITE_` 前缀的变量会注入前端构建产物，其他变量由服务端 API 路由读取。**不要**把 `ARK_API_KEY` 等密钥暴露给前端。
+
+### 3. 上线后的每日 API 用量限额
+
+生产环境会对登录用户按日限制 API 调用次数：
+
+| 路由 | 每日限额 |
+|------|---------|
+| `/api/chat` | 30 |
+| `/api/extract-profile` | 60 |
+| `/api/polish-tone` | 10 |
+| `/api/diary-context` | 100 |
+
+超限返回 HTTP 429。限额通过 Supabase `api_usage_daily` 表自动统计，按 Supabase 数据库日期统计，日期自然切换后重新计数。
+
+### 4. 部署后验证
+
+1. 访问生产域名，确认登录页正常加载。
+2. 注册新账号并登录，写一篇日记验证 AI 画像整理。
+3. 发送聊天消息，确认流式回复正常。
+4. 打开透明大脑，确认记忆数据隔离。
+5. 检查 Vercel Functions 日志，确认无异常。
 
 ## Supabase 数据结构
 
@@ -119,6 +169,8 @@ http://localhost:3000
 
 `chat_messages` 保存每条用户或模型消息，并通过 `conversation_id` 归属到会话。
 
+`api_usage_daily` 按 `user_id + date + route` 记录每日 API 调用次数，后端限流通过 `check_api_usage_daily` RPC 函数原子统计。
+
 ## API 路由
 
 - `api/chat.ts`：聊天回复，返回 `text/plain` 流。
@@ -127,6 +179,7 @@ http://localhost:3000
 - `api/polish-tone.ts`：把用户描述整理成可执行的回复语气提示词。
 - `api/_lib/auth.ts`：校验 Supabase 登录 token。
 - `api/_lib/env.ts`：读取本地 `.env.local` 和运行时环境变量。
+- `api/_lib/rateLimit.ts`：每日 API 用量限流，通过 Supabase RPC 原子计数。
 - `api/_lib/aiProvider.ts`：豆包请求、流式解析、画像归一化和记忆召回。
 - `api/_lib/supportPlaybook.ts`：心理陪伴安全知识库。
 

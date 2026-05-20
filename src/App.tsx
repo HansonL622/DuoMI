@@ -316,7 +316,7 @@ function AuthScreen() {
         </div>
 
         <div className="bg-white/70 rounded-2xl p-4 border border-[#F0EBE1] text-xs text-[#8C8C8C] leading-relaxed">
-          DuoMi 是心理陪伴工具，不替代专业心理咨询、诊断或医疗建议。如果你正在经历立即危险，请优先联系身边可信任的人或当地紧急服务。
+          DuoMi 是心理陪伴工具，不是医疗服务，也不提供专业心理咨询、诊断或治疗。你写下的日记和聊天内容会保存到 Supabase 云端数据库中，AI 回复由服务端调用模型生成。如果你正在经历紧急危险，请优先联系身边可信任的人或当地紧急服务。
         </div>
       </div>
     </div>
@@ -1700,7 +1700,7 @@ export default function App() {
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-[#F0EBE1]">
                 <h3 className="text-sm font-bold text-[#3D3D3D] mb-3">心理陪伴说明</h3>
                 <p className="text-xs text-[#8C8C8C] leading-relaxed">
-                  DuoMi 是陪伴工具，不替代专业心理咨询、诊断或医疗建议。如果你正在经历立即危险，请联系身边可信任的人或当地紧急服务。
+                  DuoMi 是心理陪伴工具，不是医疗服务，也不提供专业心理咨询、诊断或治疗。你的日记和聊天内容会保存到 Supabase 云端数据库，AI 回复由服务端调用模型生成。如果你正在经历紧急危险，请优先联系身边可信任的人或当地紧急服务。
                 </p>
               </div>
 
