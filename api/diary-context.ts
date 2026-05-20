@@ -1,4 +1,6 @@
 import { requireUser } from './_lib/auth';
+import { checkRateLimit, RateLimitError } from './_lib/rateLimit';
+import { getEnv } from './_lib/env';
 import type { PlaceSnapshot, WeatherSnapshot } from '../src/types';
 
 type ApiRequest = {
@@ -127,10 +129,11 @@ async function fetchPlace({ latitude, longitude }: Coordinates): Promise<PlaceSn
     zoom: '10',
     'accept-language': 'zh-CN,zh,en',
   });
+  const siteUrl = getEnv('SITE_URL') || 'https://duomi.local';
   const response = await fetchWithTimeout(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
     headers: {
-      'User-Agent': 'DuoMi/1.0 (https://duomi-drab.vercel.app)',
-      Referer: 'https://duomi-drab.vercel.app',
+      'User-Agent': `DuoMi/1.0 (${siteUrl})`,
+      Referer: siteUrl,
     },
   });
 
@@ -166,6 +169,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   try {
     await requireUser(req);
     const coordinates = parseCoordinates(req.body);
+    await checkRateLimit('diary-context', req);
     const [weatherResult, placeResult] = await Promise.allSettled([
       fetchWeather(coordinates),
       fetchPlace(coordinates),
@@ -179,6 +183,10 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         : '',
     });
   } catch (error) {
+    if (error instanceof RateLimitError) {
+      res.status(429).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : '天气和地点背景获取失败' });
   }
 }

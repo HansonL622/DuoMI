@@ -1,5 +1,6 @@
 import { getAiProvider } from './_lib/aiProvider';
 import { requireUser } from './_lib/auth';
+import { checkRateLimit, RateLimitError } from './_lib/rateLimit';
 
 type ApiRequest = {
   method?: string;
@@ -24,10 +25,15 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       res.status(400).json({ error: '请先写下你想要的语气' });
       return;
     }
+    await checkRateLimit('polish-tone', req);
 
     const prompt = await getAiProvider().polishToneInstruction(userRequest);
     res.status(200).json({ prompt });
   } catch (error) {
+    if (error instanceof RateLimitError) {
+      res.status(429).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : '专属语气生成失败' });
   }
 }
