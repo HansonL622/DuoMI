@@ -75,6 +75,7 @@ function normalizeMemoryEvents(events: unknown): MemoryEvent[] {
       content: typeof event.content === 'string' ? event.content.trim() : '',
       severity: normalizeSeverity(event.severity),
       source: event.source,
+      source_diary_id: typeof event.source_diary_id === 'string' ? event.source_diary_id : undefined,
       created_at: typeof event.created_at === 'string' ? event.created_at : undefined,
       updated_at: typeof event.updated_at === 'string' ? event.updated_at : undefined,
     }))
@@ -107,6 +108,10 @@ function toLocalDateString(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function formatPlaceName(place: PlaceSnapshot): string {
+  return place.city || place.label.split(/[，,]/)[0]?.trim() || place.label;
 }
 
 function toDiaryEntry(row: DiaryRow): DiaryEntry {
@@ -192,9 +197,18 @@ export async function createDiaryEntry(
     .single();
 
   if (error && isMissingDiaryContextColumnError(error)) {
+    console.warn('DuoMi: weather/place columns missing in Supabase — embedding context into diary content as fallback');
+    const contextSuffix = [
+      weather ? `天气: ${weather.conditionLabel} ${Number.isFinite(weather.temperatureC) ? `${weather.temperatureC}°C` : ''}`.trim() : '',
+      place ? `地点: ${formatPlaceName(place)}` : '',
+    ].filter(Boolean).join('；');
+    const enrichedEntry = {
+      ...baseEntry,
+      content: contextSuffix ? `${baseEntry.content}\n\n---\n${contextSuffix}` : baseEntry.content,
+    };
     const retry = await client
       .from('diary_entries')
-      .insert(baseEntry)
+      .insert(enrichedEntry)
       .select('*')
       .single();
     data = retry.data;
@@ -324,6 +338,12 @@ export async function createChatMessage(conversationId: string, role: ChatMessag
     content: data.content,
     created_at: data.created_at,
   };
+}
+
+export async function deleteChatMessage(id: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.from('chat_messages').delete().eq('id', id);
+  if (error) throw error;
 }
 
 export async function clearAllUserData(userId: string): Promise<void> {

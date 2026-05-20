@@ -111,6 +111,7 @@ function normalizeMemoryEvents(input: unknown, fallback: UserProfile | null): Me
         content,
         severity: normalizeSeverity(item.severity ?? previous?.severity),
         source: item.source || previous?.source || 'experience',
+        source_diary_id: typeof item.source_diary_id === 'string' ? item.source_diary_id : previous?.source_diary_id,
         created_at: typeof item.created_at === 'string' ? item.created_at : previous?.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -530,6 +531,8 @@ class DoubaoArkProvider implements AiProvider {
       '根据新日记更新用户心理画像，保留仍然重要的旧信息，去掉重复、过期或过度推断的内容。',
       '不要把用户已否定的 rejected_memories 再加入画像。',
       'JSON 字段必须是 key_facts、recent_mood、current_stressors、deep_fears、memory_events。',
+      'recent_mood 只描述这篇新日记中用户明确表达的当下情绪，必须短到 2 到 8 个中文字符；如果 moodLabel 存在，优先直接使用 moodLabel，不要混入旧日记或旧记忆。',
+      '不要把一次普通日程、消费、吃饭、收到红包这类短期事件写入长期记忆，除非用户明确说它反复影响自己或非常重要。',
       'memory_events 是统一的重要记忆列表，每项包含 id、content、severity、source；severity 为 1 到 5，1=轻微短期烦恼，5=高严重长期影响。',
       '只有持续、反复、影响睡眠/学习/工作/关系或用户明显痛苦的内容才进入 memory_events；普通吐槽、一天内的小烦躁不要长期记住。',
       '天气和地点只能作为日记发生背景，不得作为用户心理状态、情绪变化、人格倾向、心理疾病或风险等级的归因。',

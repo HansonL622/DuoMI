@@ -44,7 +44,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ entries, onAddMemory
 
   // Create a map of entries by date string (YYYY-MM-DD)
   const entriesByDate = entries.reduce((acc, entry) => {
-    const date = new Date(entry.timestamp || Date.now());
+    const date = new Date(entry.timestamp ?? Date.now());
     const dateStr = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
     if (!acc[dateStr]) {
       acc[dateStr] = [];

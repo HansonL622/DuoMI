@@ -1,6 +1,8 @@
 import type { ChatMessage, ChatRuntimeContext, DiaryEntry, PlaceSnapshot, UserProfile, WeatherSnapshot } from '../types';
 import { supabase } from './supabaseClient';
 
+const JSON_API_TIMEOUT_MS = 90000;
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
 
@@ -12,14 +14,22 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 async function postJson<TResponse>(url: string, body: unknown): Promise<TResponse> {
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), JSON_API_TIMEOUT_MS);
   try {
     response = await fetch(url, {
       method: 'POST',
       headers: await getAuthHeaders(),
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('透明大脑整理超时，请稍后再试');
+    }
     throw new Error('DuoMi 连接失败：请确认本地服务已启动，或稍后再试');
+  } finally {
+    clearTimeout(timeout);
   }
 
   const payload = await response.json().catch(() => null);

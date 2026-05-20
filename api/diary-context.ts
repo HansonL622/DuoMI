@@ -16,7 +16,7 @@ type Coordinates = {
   longitude: number;
 };
 
-const REQUEST_TIMEOUT_MS = 7000;
+const REQUEST_TIMEOUT_MS = 12000;
 
 const weatherCodeLabels: Record<number, string> = {
   0: '晴',

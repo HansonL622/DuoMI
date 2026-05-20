@@ -30,6 +30,7 @@ import {
   createDiaryEntry,
   deleteChatConversation,
   deleteDiaryEntry,
+  deleteChatMessage,
   getOrCreateProfile,
   listChatConversations,
   listChatMessages,
@@ -39,7 +40,7 @@ import {
 } from './services/dataService';
 import { extractProfile, polishCustomTone, streamCompanionMessage } from './services/duomiApi';
 import { isSupabaseConfigured, supabase } from './services/supabaseClient';
-import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, ResponseTone, UserProfile } from './types';
+import type { ChatConversation, ChatMessage, DiaryEntry, MemoryEvent, MemorySeverity, Mood, PlaceSnapshot, ResponseTone, UserProfile, WeatherSnapshot } from './types';
 import { formatDiaryContext } from './utils/diaryContext';
 
 const moods: Mood[] = ['happy', 'angry', 'sad', 'naughty', 'surprised', 'sleepy', 'shy', 'proud', 'scared'];
@@ -93,6 +94,11 @@ const brainRecoveryQuestions = [
   '我最想去的城市是哪一座？',
 ];
 
+type BrainUpdateState = {
+  status: 'idle' | 'updating' | 'updated' | 'unchanged' | 'error';
+  message?: string;
+};
+
 function normalizeRecoveryAnswer(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
@@ -130,6 +136,52 @@ function getMemoryEvents(profile: UserProfile | null): MemoryEvent[] {
       source: 'experience' as const,
     })),
   ].filter((event) => event.content);
+}
+
+function normalizeMemoryText(value: string): string {
+  return value.replace(/[^\p{Letter}\p{Number}]+/gu, '').toLowerCase();
+}
+
+function getBigrams(value: string): Set<string> {
+  const normalized = normalizeMemoryText(value);
+  const bigrams = new Set<string>();
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    bigrams.add(normalized.slice(index, index + 2));
+  }
+  return bigrams;
+}
+
+function isMemoryRelatedToEntry(memory: MemoryEvent, entry: DiaryEntry): boolean {
+  if (memory.source_diary_id === entry.id) return true;
+
+  const memoryText = normalizeMemoryText(memory.content);
+  const entryText = normalizeMemoryText(entry.content);
+  if (!memoryText || !entryText) return false;
+  if (entryText.includes(memoryText.slice(0, 8)) || memoryText.includes(entryText.slice(0, 8))) return true;
+
+  const entryBigrams = getBigrams(entry.content);
+  let overlap = 0;
+  getBigrams(memory.content).forEach((bigram) => {
+    if (entryBigrams.has(bigram)) overlap += 1;
+  });
+
+  return overlap >= 4;
+}
+
+function tagProfileEventsFromDiary(nextProfile: UserProfile, previousProfile: UserProfile | null, diaryEntryId?: string): UserProfile {
+  if (!diaryEntryId || !nextProfile.memory_events?.length) return nextProfile;
+
+  const previousByContent = new Map((previousProfile?.memory_events || []).map((event) => [event.content, event]));
+  return {
+    ...nextProfile,
+    memory_events: nextProfile.memory_events.map((event) => {
+      const previous = previousByContent.get(event.content);
+      return {
+        ...event,
+        source_diary_id: previous ? previous.source_diary_id || event.source_diary_id : event.source_diary_id || diaryEntryId,
+      };
+    }),
+  };
 }
 
 function forgettingLabel(severity: MemorySeverity): string {
@@ -280,6 +332,9 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const profileRef = useRef<UserProfile | null>(null);
+  const profileUpdateQueueRef = useRef<Promise<void>>(Promise.resolve());
+  profileRef.current = profile;
   const [diaryEntries, setDiaryEntries] = useState<DiaryEntry[]>([]);
   const [chatConversations, setChatConversations] = useState<ChatConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -313,6 +368,7 @@ export default function App() {
   const [brainRecoveryAnswerInput, setBrainRecoveryAnswerInput] = useState('');
   const [brainResetPasscodeDraft, setBrainResetPasscodeDraft] = useState('');
   const [brainRecoveryError, setBrainRecoveryError] = useState('');
+  const [brainUpdateState, setBrainUpdateState] = useState<BrainUpdateState>({ status: 'idle' });
   const [dogState, setDogState] = useState<'listening' | 'recording' | 'thinking' | 'responding'>('listening');
   const [error, setError] = useState<string | null>(null);
 
@@ -458,11 +514,44 @@ export default function App() {
   }, [activeConversationId, isChatting]);
 
   const relatedDiaryEntries = useMemo(() => diaryEntries.slice(0, 8), [diaryEntries]);
+  const recentDiaryEntries = useMemo(() => diaryEntries.slice(0, 5), [diaryEntries]);
 
   const persistProfile = async (nextProfile: UserProfile) => {
     if (!userId) return;
+    profileRef.current = nextProfile;
     setProfile(nextProfile);
     await saveProfile(userId, nextProfile);
+  };
+
+  const queueProfileExtraction = (
+    content: string,
+    moodLabel?: string,
+    weather?: WeatherSnapshot,
+    place?: PlaceSnapshot,
+    diaryEntryId?: string,
+  ) => {
+    setBrainUpdateState({ status: 'updating', message: '正在整理新日记里的重要信息。' });
+    const nextTask = profileUpdateQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const latestProfile = profileRef.current;
+        const previousContents = new Set((latestProfile?.memory_events || []).map((event) => event.content));
+        const extractedProfile = await extractProfile(latestProfile, content, moodLabel, weather, place);
+        const nextProfile = tagProfileEventsFromDiary(extractedProfile, latestProfile, diaryEntryId);
+        await persistProfile({
+          ...nextProfile,
+          rejected_memories: latestProfile?.rejected_memories || nextProfile.rejected_memories || [],
+        });
+        const addedMemory = (nextProfile.memory_events || []).some((event) => !previousContents.has(event.content));
+        setBrainUpdateState(
+          addedMemory
+            ? { status: 'updated', message: '已更新重要记忆。' }
+            : { status: 'unchanged', message: '已整理完成；这篇日记暂时没有新增需要长期记住的事项。' },
+        );
+      });
+
+    profileUpdateQueueRef.current = nextTask;
+    return nextTask;
   };
 
   const handleChangeResponseTone = async (responseTone: ResponseTone) => {
@@ -531,19 +620,21 @@ export default function App() {
         saveNotes.push('Supabase 还没有同步天气和地点字段，所以这次只保存了文字和心情。');
       }
 
-      try {
-        const nextProfile = await extractProfile(profile, content, mood ? moodLabelMap[mood] : undefined, savedEntry.weather, savedEntry.place);
-        await persistProfile({
-          ...nextProfile,
-          rejected_memories: profile?.rejected_memories || nextProfile.rejected_memories || [],
-        });
-        if (saveNotes.length > 0) {
-          setError(`日记已保存；${saveNotes.join('；')}`);
-        }
-      } catch (profileError) {
-        const profileMessage = profileError instanceof Error ? profileError.message : '画像更新失败';
-        setError(`日记已保存；${[...saveNotes, `画像更新失败：${profileMessage}`].join('；')}`);
+      const moodLabel = mood ? moodLabelMap[mood] : undefined;
+      if (saveNotes.length > 0) {
+        setError(`日记已保存；${saveNotes.join('；')}`);
       }
+      queueProfileExtraction(
+        content,
+        moodLabel,
+        savedEntry.weather || diaryContext.weather,
+        savedEntry.place || diaryContext.place,
+        savedEntry.id,
+      ).catch((profileError) => {
+        const profileMessage = profileError instanceof Error ? profileError.message : '画像更新失败';
+        setBrainUpdateState({ status: 'error', message: `大脑更新失败：${profileMessage}` });
+        setError(`日记已保存；大脑更新失败：${profileMessage}`);
+      });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : '日记保存失败');
     } finally {
@@ -568,11 +659,7 @@ export default function App() {
       setEditingEntry(null);
 
       try {
-        const nextProfile = await extractProfile(profile, updated.content, updated.mood ? moodLabelMap[updated.mood] : undefined, updated.weather, updated.place);
-        await persistProfile({
-          ...nextProfile,
-          rejected_memories: profile?.rejected_memories || nextProfile.rejected_memories || [],
-        });
+        await queueProfileExtraction(updated.content, updated.mood ? moodLabelMap[updated.mood] : undefined, updated.weather, updated.place, updated.id);
       } catch (profileError) {
         setError(profileError instanceof Error ? `日记已更新，但画像更新失败：${profileError.message}` : '日记已更新，但画像更新失败');
       }
@@ -590,6 +677,23 @@ export default function App() {
     try {
       await deleteDiaryEntry(entry.id);
       setDiaryEntries((prev) => prev.filter((item) => item.id !== entry.id));
+      const base = profileRef.current;
+      if (base) {
+        const relatedContents = new Set(
+          (base.memory_events || [])
+            .filter((memory) => isMemoryRelatedToEntry(memory, entry))
+            .map((memory) => memory.content),
+        );
+        if (relatedContents.size > 0) {
+          await persistProfile({
+            ...base,
+            memory_events: (base.memory_events || []).filter((memory) => !relatedContents.has(memory.content)),
+            current_stressors: base.current_stressors.filter((item) => !relatedContents.has(item)),
+            key_facts: base.key_facts.filter((item) => !relatedContents.has(item)),
+            deep_fears: base.deep_fears.filter((item) => !relatedContents.has(item)),
+          });
+        }
+      }
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : '日记删除失败');
     }
@@ -646,8 +750,25 @@ export default function App() {
     setIsResponding(false);
     setError(null);
 
+    let conversationId: string | null = null;
+    let savedUserMessageId: string | null = null;
+    const pendingUserMessage: ChatMessage = {
+      id: `pending-user-${Date.now()}`,
+      conversation_id: '',
+      role: 'user',
+      content: userMsg,
+      created_at: new Date().toISOString(),
+    };
+    const pendingModelMessage: ChatMessage = {
+      id: `pending-model-${Date.now()}`,
+      conversation_id: '',
+      role: 'model',
+      content: '',
+      created_at: new Date().toISOString(),
+    };
+
     try {
-      let conversationId = activeConversationId;
+      conversationId = activeConversationId;
       if (!conversationId) {
         const createdConversation = await createChatConversation(makeConversationTitle(userMsg));
         conversationId = createdConversation.id;
@@ -655,27 +776,13 @@ export default function App() {
         setChatConversations((prev) => [createdConversation, ...prev]);
       }
 
-      const pendingUserMessage: ChatMessage = {
-        id: `pending-user-${Date.now()}`,
-        conversation_id: conversationId,
-        role: 'user',
-        content: userMsg,
-        created_at: new Date().toISOString(),
-      };
+      pendingUserMessage.conversation_id = conversationId;
+      pendingModelMessage.conversation_id = conversationId;
       const nextHistory = [...chatHistory, pendingUserMessage];
       setChatHistory(nextHistory);
-
-      const pendingModelMessage: ChatMessage = {
-        id: `pending-model-${Date.now()}`,
-        conversation_id: conversationId,
-        role: 'model',
-        content: '',
-        created_at: new Date().toISOString(),
-      };
       let hasStartedStreaming = false;
       let streamedResponse = '';
 
-      const savedUserMessagePromise = createChatMessage(conversationId, 'user', userMsg);
       const response = await streamCompanionMessage(profile, nextHistory, userMsg, relatedDiaryEntries, (delta) => {
         streamedResponse += delta;
         const isFirstDelta = !hasStartedStreaming;
@@ -701,10 +808,9 @@ export default function App() {
         setChatHistory((prev) => [...prev, { ...pendingModelMessage, content: response }]);
       }
 
-      const [savedUserMessage, savedModelMessage] = await Promise.all([
-        savedUserMessagePromise,
-        createChatMessage(conversationId, 'model', response),
-      ]);
+      const savedUserMessage = await createChatMessage(conversationId, 'user', userMsg);
+      savedUserMessageId = savedUserMessage.id || null;
+      const savedModelMessage = await createChatMessage(conversationId, 'model', response);
       setChatHistory((prev) =>
         prev.map((messageItem) => {
           if (messageItem.id === pendingUserMessage.id) return savedUserMessage;
@@ -729,6 +835,16 @@ export default function App() {
     } catch (chatError) {
       setChatInput(userMsg);
       setError(chatError instanceof Error ? chatError.message : 'DuoMi 暂时没有回应');
+      setChatHistory((prev) =>
+        prev.filter((msg) => msg.id !== pendingUserMessage.id && msg.id !== pendingModelMessage.id),
+      );
+      if (savedUserMessageId) {
+        deleteChatMessage(savedUserMessageId).catch(() => {});
+      }
+      if (!activeConversationId && conversationId) {
+        deleteChatConversation(conversationId).catch(() => {});
+        setChatConversations((prev) => prev.filter((c) => c.id !== conversationId));
+      }
     } finally {
       setIsChatting(false);
       setStreamingMessageId(null);
@@ -749,7 +865,7 @@ export default function App() {
     const base = profile || emptyProfile();
     const nextProfile: UserProfile = {
       ...base,
-      memory_events: memoryEvents.filter((item) => item.id !== memory.id && item.content !== memory.content),
+      memory_events: memoryEvents.filter((item) => item.id !== memory.id),
       current_stressors: base.current_stressors.filter((item) => item !== memory.content),
       key_facts: base.key_facts.filter((item) => item !== memory.content),
       deep_fears: base.deep_fears.filter((item) => item !== memory.content),
@@ -1024,7 +1140,7 @@ export default function App() {
                     过往心事 <span className="h-px flex-1 bg-[#F0EBE1]"></span>
                   </h3>
                   <div className="space-y-3">
-                    {diaryEntries.map((entry) => (
+                    {recentDiaryEntries.map((entry) => (
                       <div key={entry.id} className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div>
@@ -1314,18 +1430,23 @@ export default function App() {
                       这里是 DuoMi 记住的私密信息。你可以调整严重程度，等级越低越快淡出，DuoMi 也会更少提及。
                     </p>
 
-                    {!profile || (!profile.recent_mood && memoryEvents.length === 0) ? (
+                    {!profile || (memoryEvents.length === 0 && brainUpdateState.status === 'idle') ? (
                       <div className="text-sm text-[#A0A0A0] italic bg-white p-5 rounded-2xl border border-[#F0EBE1] border-dashed text-center">
                         <Dog size={24} className="mx-auto mb-2 opacity-50" />
                         暂无记忆。<br />写一篇日记让 DuoMi 认识你吧。
                       </div>
                     ) : (
                       <div className="space-y-5">
-                        {profile.recent_mood && (
+                        {brainUpdateState.status !== 'idle' && (
                           <div className="bg-white p-4 rounded-2xl shadow-sm border border-[#F0EBE1]">
-                            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-3">当下情绪</h3>
-                            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF0E5] text-[#D96B52] rounded-xl text-sm font-semibold">
-                              {profile.recent_mood}
+                            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#A0A0A0] mb-3">整理状态</h3>
+                            <div className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold ${
+                              brainUpdateState.status === 'error'
+                                ? 'bg-[#FFF0ED] text-[#D96B52]'
+                                : 'bg-[#FFF0E5] text-[#D96B52]'
+                            }`}>
+                              {brainUpdateState.status === 'updating' && <Loader2 size={13} className="animate-spin" />}
+                              {brainUpdateState.message}
                             </div>
                           </div>
                         )}

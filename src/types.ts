@@ -18,6 +18,7 @@ export interface MemoryEvent {
   content: string;
   severity: MemorySeverity;
   source?: 'stress' | 'experience' | 'fear' | 'fact';
+  source_diary_id?: string;
   created_at?: string;
   updated_at?: string;
 }

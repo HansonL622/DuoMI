@@ -12,7 +12,18 @@ type DiaryContextResult = {
   warning?: string;
 };
 
-const LOCATION_TIMEOUT_MS = 8000;
+const LOCATION_TIMEOUT_MS = 12000;
+const CONTEXT_TIMEOUT_MS = 18000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise
+      .then(resolve)
+      .catch(reject)
+      .finally(() => clearTimeout(timeout));
+  });
+}
 
 function getCurrentPosition(): Promise<Coordinates> {
   return new Promise((resolve, reject) => {
@@ -70,17 +81,17 @@ export async function collectDiaryContext(): Promise<DiaryContextResult> {
   let coordinates: Coordinates;
   try {
     coordinates = await getCurrentPosition();
-  } catch {
+  } catch (locationError) {
     return {
-      warning: '未获得定位权限，所以没有记录天气和地点背景。',
+      warning: locationError instanceof Error ? `未记录天气和地点：${locationError.message}` : '未获得定位权限，所以没有记录天气和地点背景。',
     };
   }
 
   try {
-    return await fetchDiaryContext(coordinates);
-  } catch {
+    return await withTimeout(fetchDiaryContext(coordinates), CONTEXT_TIMEOUT_MS, '天气和地点服务响应超时');
+  } catch (contextError) {
     return {
-      warning: '天气和地点背景暂时获取失败。',
+      warning: contextError instanceof Error ? `天气和地点背景暂时获取失败：${contextError.message}` : '天气和地点背景暂时获取失败。',
     };
   }
 }
